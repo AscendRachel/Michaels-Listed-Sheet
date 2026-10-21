@@ -1,0 +1,15 @@
+.venv
+.git
+.gitignore
+.pytest_cache
+__pycache__
+*.pyc
+data
+scraper
+tests
+*.bat
+.env
+.env.*
+!.env.example
+deploy
+README.md

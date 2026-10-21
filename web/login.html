@@ -1,0 +1,62 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · {{APP_NAME}}</title>
+<link rel="icon" href="{{ICON_HREF}}">
+<link rel="stylesheet" href="/static/app.css">
+{{BRAND_STYLE}}
+<script>try{var t=localStorage.getItem("gt_theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<style>
+  body { display: grid; place-items: center; min-height: 100vh; padding: 20px; }
+  .box { width: min(400px, 100%); }
+  .box .brand { margin-bottom: 18px; }
+  form { display: grid; gap: 12px; }
+</style>
+</head>
+<body>
+<div class="box card">
+  <div class="brand">{{LOGO_HTML}}<h1 id="title">{{APP_NAME}}</h1></div>
+  <p class="muted" id="sub">Sign in with your own login.</p>
+  <div id="msg"></div>
+  <form id="form">
+    <label class="field" id="nameRow" hidden><span>Your name</span><input id="name" autocomplete="name"></label>
+    <label class="field"><span>Username</span><input id="user" autocomplete="username" autocapitalize="off" required></label>
+    <label class="field"><span id="pwLabel">Password</span><input id="pw" type="password" autocomplete="current-password" required></label>
+    <button class="btn primary" id="go" style="justify-content:center">Sign in</button>
+  </form>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+let setup = false;
+const show = (t, cls) => ($("msg").innerHTML = t ? `<div class="banner ${cls || ""}">${t.replace(/</g, "&lt;")}</div>` : "");
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || "Something went wrong.");
+  return j;
+}
+(async () => {
+  try {
+    const s = await (await fetch("/api/setup-needed")).json();
+    if (s.setup) {
+      if (!s.allowed) { show("The app isn't set up yet. Open it on the server PC to create the first admin.", "bad"); $("form").hidden = true; return; }
+      setup = true;
+      $("title").textContent = "Create the admin account";
+      $("sub").textContent = "This is the first start. Pick a name, username and password for yourself.";
+      $("nameRow").hidden = false; $("go").textContent = "Create account"; $("pw").autocomplete = "new-password";
+      $("pwLabel").textContent = "Password (8+ characters)";
+    }
+  } catch { show("Can't reach the server.", "bad"); }
+})();
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault(); show(""); $("go").disabled = true;
+  try {
+    await post(setup ? "/api/setup" : "/api/login", { username: $("user").value, password: $("pw").value, name: $("name").value });
+    location.href = "/";
+  } catch (err) { show(err.message, "bad"); $("go").disabled = false; }
+});
+</script>
+</body>
+</html>

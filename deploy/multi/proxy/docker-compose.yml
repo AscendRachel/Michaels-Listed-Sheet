@@ -1,0 +1,31 @@
+﻿# The shared front door for every app on this server: ONE Caddy that owns ports 80 and 443 and sends each
+# domain to the right app. Start it once:   docker compose up -d      (from this folder)
+# Add an app by dropping a file in ./sites (see sites/greentek.caddy.example), then:
+#   docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
+name: edge-proxy
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./sites:/etc/caddy/sites:ro
+      - caddy-data:/data                 # the HTTPS certificates
+      - caddy-config:/config
+    networks:
+      - edge
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+networks:
+  edge:
+    name: edge                           # every app joins this network; apps publish no ports of their own
+
+volumes:
+  caddy-data:
+  caddy-config:

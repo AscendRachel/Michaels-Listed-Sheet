@@ -1,0 +1,12 @@
+﻿# Copy to greentek.caddy (any name ending in .caddy), set your domain, then reload Caddy.
+# "greentek-app" is the APP_NAME of that app (the name other containers reach it by).
+catalog.example.com {
+	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+	reverse_proxy greentek-app:8000
+}

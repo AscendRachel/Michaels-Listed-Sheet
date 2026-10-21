@@ -1,0 +1,17 @@
+import { nextSeries as s } from "../web/static/js/fill.js";
+const eq = (a, b, m) => { if (JSON.stringify(a) !== JSON.stringify(b)) { console.log("FAIL", m, JSON.stringify(a), "expected", JSON.stringify(b)); process.exitCode = 1; } };
+eq(s(["SKU123"], 3), ["SKU124", "SKU125", "SKU126"], "sku");
+eq(s(["GT-0099"], 3), ["GT-0100", "GT-0101", "GT-0102"], "padded");
+eq(s(["GT-00009"], 2), ["GT-00010", "GT-00011"], "padded width kept");
+eq(s(["5"], 3), ["5", "5", "5"], "single plain number copies");
+eq(s(["10", "20"], 3), ["30", "40", "50"], "two numbers step");
+eq(s(["1.5", "2.5"], 2), ["3.5", "4.5"], "decimals");
+eq(s(["SKU1", "SKU3"], 2), ["SKU5", "SKU7"], "text step 2");
+eq(s(["Item 9"], 2), ["Item 10", "Item 11"], "space prefix");
+eq(s(["12pcs"], 2), ["13pcs", "14pcs"], "suffix");
+eq(s(["Red", "Blue"], 5), ["Red", "Blue", "Red", "Blue", "Red"], "cycle text");
+eq(s(["TRUE"], 2), ["TRUE", "TRUE"], "bool copy");
+eq(s(["A1", "B2"], 2), ["A1", "B2"], "different prefixes cycle");
+eq(s(["SKU5", "SKU3"], 4), ["SKU1", "SKU3", "SKU5", "SKU3"], "never below zero");
+eq(s([""], 2), ["", ""], "blank");
+eq(s(["A1B2"], 1), ["A1B3"], "last number group");

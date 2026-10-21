@@ -1,0 +1,2 @@
+﻿# One block per app lives in ./sites/*.caddy
+import /etc/caddy/sites/*.caddy

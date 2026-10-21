@@ -1,0 +1,48 @@
+﻿# One app instance behind the shared proxy (deploy/multi/proxy). Run it once per app:
+#
+#   cp ../../.env.multi.example my-app.env      and edit it (APP_NAME and DOMAIN must be different for every app)
+#   docker compose --env-file my-app.env up -d --build
+#   docker compose --env-file my-app.env exec app python run.py adduser YOURNAME --admin
+#
+# Each app has its own project name, its own data volume (database + backups), its own login cookie and its own
+# scraper key, so apps never see each other's data. No ports are published: only the shared Caddy can reach it.
+name: ${APP_NAME:?Set APP_NAME in the env file}
+
+services:
+  app:
+    build:
+      context: ../..
+    image: greentek-catalog:${APP_VERSION:-latest}      # built once, shared by every instance
+    restart: unless-stopped
+    environment:
+      GT_PUBLIC_URL: https://${DOMAIN:?Set DOMAIN in the env file}
+      GT_PORT: ${APP_PORT:-8000}
+      GT_COOKIE: ${COOKIE_NAME:-gt_session_${APP_NAME}}
+      GT_TRUSTED_PROXY: "*"
+      TZ: ${TZ:-America/New_York}
+      GT_APP_NAME: ${BRAND_NAME:-Greentek Catalog}      # what this store shows in the browser tab and header
+      GT_APP_MARK: ${BRAND_MARK:-GT}
+      GT_BRAND_COLOR: ${BRAND_COLOR:-}
+    volumes:
+      - data:/data
+    networks:
+      edge:
+        aliases:
+          - ${APP_NAME}-app                            # the name to use in the proxy's site file
+    mem_limit: ${APP_MEMORY:-768m}
+    stop_grace_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+networks:
+  edge:
+    external: true
+    name: edge
+
+volumes:
+  data:

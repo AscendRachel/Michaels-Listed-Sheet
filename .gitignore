@@ -1,0 +1,19 @@
+.venv/
+data/
+demo-data/
+__pycache__/
+.pytest_cache/
+.env
+scraper/scraper_settings.json
+
+# never upload these: the scraper's browser profiles (logins/cookies), databases and backups, server logs, real settings
+scraper/profiles/
+backups-offsite/
+*.db
+*.db-wal
+*.db-shm
+*.db.gz
+*.log
+.env.*
+!.env.example
+!.env.multi.example

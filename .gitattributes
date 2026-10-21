@@ -1,0 +1,7 @@
+# Store text files with Unix line endings so the Linux server runs them as written
+* text=auto
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+Caddyfile text eol=lf
+*.bat text eol=crlf

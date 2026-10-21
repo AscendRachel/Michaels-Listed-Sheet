@@ -1,0 +1,22 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{APP_NAME}}</title>
+<link rel="icon" href="{{ICON_HREF}}">
+<link rel="stylesheet" href="/static/app.css">
+{{BRAND_STYLE}}
+<script>try{var t=localStorage.getItem("gt_theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <div class="brand" id="brand">{{LOGO_HTML}}<h1>{{APP_NAME}}</h1></div>
+  <nav class="tabs" id="tabs" aria-label="Main"></nav>
+  <div class="me" id="me"></div>
+</header>
+<main id="main"><div class="empty">Loading…</div></main>
+<div id="toasts" aria-live="polite"></div>
+<script type="module" src="/static/js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+﻿# Greentek Catalog on a server: the app plus Caddy (automatic HTTPS). One app per server.
+# For several apps on one server use deploy/multi/ instead (one shared Caddy for all of them).
+#
+#   1. cp .env.example .env     and set DOMAIN (and TZ if you are not on US Eastern time)
+#   2. docker compose up -d --build
+#   3. docker compose exec app python run.py adduser YOURNAME --admin
+#
+# Everything you may want to change is in .env: the public ports, the port inside the container, memory, time zone.
+name: ${COMPOSE_PROJECT_NAME:-greentek}
+
+services:
+  app:
+    build: .
+    image: greentek-catalog:${APP_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      GT_PUBLIC_URL: https://${DOMAIN:?Set DOMAIN in .env}
+      GT_PORT: ${APP_PORT:-8000}                 # the port inside the container, change it freely
+      GT_COOKIE: ${COOKIE_NAME:-gt_session}
+      GT_TRUSTED_PROXY: "*"                      # safe here: the app has no published port, only Caddy can reach it
+      TZ: ${TZ:-America/New_York}
+      GT_APP_NAME: ${BRAND_NAME:-Greentek Catalog}   # the name shown in the browser tab and header (an admin can change it in the app)
+      GT_APP_MARK: ${BRAND_MARK:-GT}
+      GT_BRAND_COLOR: ${BRAND_COLOR:-}
+    volumes:
+      - gt-data:/data                            # the database and the daily backups
+    expose:
+      - "${APP_PORT:-8000}"
+    mem_limit: ${APP_MEMORY:-768m}
+    stop_grace_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+      APP_HOST: app
+      APP_PORT: ${APP_PORT:-8000}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data                         # the HTTPS certificates
+      - caddy-config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  gt-data:
+  caddy-data:
+  caddy-config:
