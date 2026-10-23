@@ -12,7 +12,7 @@ services:
   app:
     build:
       context: ../..
-    image: greentek-catalog:${APP_VERSION:-latest}      # built once, shared by every instance
+    image: ${APP_IMAGE:-michaels-listed-sheet}:${APP_VERSION:-latest}      # pulled once from Docker Hub, shared by every instance
     restart: unless-stopped
     environment:
       GT_PUBLIC_URL: https://${DOMAIN:?Set DOMAIN in the env file}

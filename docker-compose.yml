@@ -10,8 +10,9 @@ name: ${COMPOSE_PROJECT_NAME:-greentek}
 
 services:
   app:
+    # Production: the published image is pulled (docker compose pull). "build: ." is only the fallback for building on the spot.
     build: .
-    image: greentek-catalog:${APP_VERSION:-latest}
+    image: ${APP_IMAGE:-michaels-listed-sheet}:${APP_VERSION:-latest}
     restart: unless-stopped
     environment:
       GT_PUBLIC_URL: https://${DOMAIN:?Set DOMAIN in .env}
