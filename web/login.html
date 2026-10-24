@@ -34,7 +34,7 @@ const show = (t, cls) => ($("msg").innerHTML = t ? `<div class="banner ${cls || 
 async function post(path, body) {
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || "Something went wrong.");
+  if (!r.ok) throw new Error(j.error || `Something went wrong (server answered ${r.status}). Ask your admin to check the server log.`);
   return j;
 }
 (async () => {

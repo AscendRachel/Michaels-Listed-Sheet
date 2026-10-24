@@ -264,3 +264,85 @@ def test_scraper_key_prefix_follows_the_stores_short_mark(loaded):
     assert agent(anon, "start", {"agent_id": "a1", "name": "PC-1", "workers": 1}, key).status_code == 200
     loaded.post("/api/brand", json={"name": "Odd", "mark": "!!", "color": ""})                                   # nothing usable in the mark: a plain prefix
     assert loaded.post("/api/scraper/key/rotate").json()["key"].startswith("key_")
+
+
+def test_a_bad_cookie_name_cannot_break_signing_in(monkeypatch, capsys):
+    import importlib
+    from app import auth as auth_mod
+    monkeypatch.setenv("GT_COOKIE", "gt_session_${APP_NAME}")           # what an old docker-compose v1 passes when it can't expand a nested default
+    fresh = importlib.reload(auth_mod)
+    try:
+        assert fresh.COOKIE == "gt_session___APP_NAME_" and "not a valid cookie name" in capsys.readouterr().out
+        for bad in ("my cookie", "gt;session", "", "  "):
+            monkeypatch.setenv("GT_COOKIE", bad)
+            name = importlib.reload(auth_mod).COOKIE
+            assert name and all(ch.isalnum() or ch in "_.-" for ch in name)
+    finally:
+        monkeypatch.delenv("GT_COOKIE", raising=False)
+        importlib.reload(auth_mod)
+
+
+def test_unexpected_server_errors_come_back_as_messages_not_blank_pages(loaded, monkeypatch):
+    from app import auth as auth_mod
+    monkeypatch.setattr(auth_mod, "check_login", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
+    quiet = TestClient(app, raise_server_exceptions=False)
+    r = quiet.post("/api/login", json={"username": "x", "password": "y"})
+    assert r.status_code == 500 and "unexpected problem (RuntimeError)" in r.json()["error"] and "boom" not in r.json()["error"]
+
+
+def test_the_app_says_clearly_when_its_data_folder_cannot_be_written(tmp_path, monkeypatch):
+    from app import db as db_mod
+    assert db_mod.check_data_writable() == ""
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_text("x")                                           # a file where the folder should be
+    monkeypatch.setattr(db_mod, "DATA_DIR", blocker / "data")
+    msg = db_mod.check_data_writable()
+    assert "cannot write to its data folder" in msg and "chown -R 10001:10001" in msg
+
+
+def test_the_import_runs_in_the_background_and_its_result_is_kept(admin, monkeypatch):
+    import time
+    from app import imports
+    from tests.conftest import SAMPLE_CSV
+    start = lambda body=SAMPLE_CSV.encode(), name="s.csv": admin.post("/api/import/start", content=body, headers={"X-Filename": name})
+    r = start()
+    assert r.status_code == 200 and r.json()["state"] in ("running", "done", "error")
+    for _ in range(100):
+        j = admin.get("/api/import/status").json()
+        if j["state"] != "running":
+            break
+        time.sleep(0.1)
+    assert j["state"] == "done" and j["summary"]["products"] == 4 and j["filename"] == "s.csv" and j["finished_at"]
+    assert admin.get("/api/products", params={"q": "SKU-1"}).json()["items"][0]["sku"] == "SKU-1"
+    # the result survives (it is kept on the server): a new "page load" still sees it
+    imports._JOB.clear()
+    assert admin.get("/api/import/status").json()["state"] == "done"
+    # a file that can't be read is reported as an error, not left hanging
+    start(b"a,b\n1,2\n", "bad.csv")
+    for _ in range(100):
+        j = admin.get("/api/import/status").json()
+        if j["state"] != "running":
+            break
+        time.sleep(0.1)
+    assert j["state"] == "error" and "SKU and SOURCE LINK" in j["error"]
+    # only one at a time, and only admins
+    gate = __import__("threading").Event()
+    real = imports.import_products
+    monkeypatch.setattr(imports, "import_products", lambda *a, **k: (gate.wait(5), real(*a, **k))[1])
+    assert start().status_code == 200
+    again = start()
+    assert again.status_code == 400 and "already running" in again.json()["error"]
+    gate.set()
+    for _ in range(100):
+        if admin.get("/api/import/status").json()["state"] != "running":
+            break
+        time.sleep(0.1)
+    # a restart while an import was running marks it as cut off
+    imports._save_job({"state": "running", "filename": "x.csv", "started_at": "2026-01-01 00:00:00"})
+    imports._JOB.clear()
+    imports.job_reset()
+    assert admin.get("/api/import/status").json()["state"] == "error" and "restarted" in admin.get("/api/import/status").json()["error"]
+    member = TestClient(app)
+    auth.add_user("mem2", "Mem", "password123", "member")
+    member.post("/api/login", json={"username": "mem2", "password": "password123"})
+    assert member.post("/api/import/start", content=b"x").status_code == 403

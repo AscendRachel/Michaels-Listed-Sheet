@@ -53,7 +53,8 @@ export async function mount(el, params, ctx) {
     <div class="panel" id="live"></div>
     <div class="two"><div class="card"><h3>Settings</h3><div id="settings" style="margin-top:10px"></div></div>
     <div style="display:grid;gap:16px"><div class="card"><h3>Products</h3><p class="muted" id="importInfo" style="margin:8px 0"></p>
-      ${admin ? `<p class="hint">Download the Listed Sheet from Google Sheets as CSV (File → Download → .csv), then choose it here. Newer scrape results already in the app are kept.</p><input type="file" id="sheet" accept=".csv,.xlsx,.xlsm">` : `<p class="hint">Only admins can import.</p>`}</div>
+      <div id="importJob"></div>
+      ${admin ? `<p class="hint">Download the Listed Sheet from Google Sheets as CSV (File → Download → .csv), then choose it here. The import runs in the background; you can leave this page and come back. Newer scrape results already in the app are kept.</p><input type="file" id="sheet" accept=".csv,.xlsx,.xlsm">` : `<p class="hint">Only admins can import.</p>`}</div>
     ${admin ? `<div class="card"><h3>Connect a scraper PC</h3><p class="hint" style="margin:8px 0">Enter this server address and key in start_scraper.bat on the scraper PC.</p>
       <dl class="kv" style="grid-template-columns:90px 1fr"><dt>Address</dt><dd class="mono">${esc(location.origin)}</dd><dt>Key</dt><dd class="mono" id="key">••••••••</dd></dl>
       <div class="btnrow" style="margin-top:10px"><button class="btn small" id="showKey">Show / copy</button><button class="btn small danger" id="rotate">New key…</button></div></div>
@@ -91,19 +92,57 @@ export async function mount(el, params, ctx) {
       toast("Settings saved.");
     } catch (err) { toast(err.message, "bad"); }
   };
+  // The import runs on the server as a background job. This only shows how it is going, so a slow server or a dropped
+  // connection can't leave the screen waiting for an answer that never arrives.
+  let watching = false, announced = null;
+  const showJob = (j) => {
+    const box = $("#importJob"), pick = $("#sheet");
+    if (!box) return;
+    if (pick) pick.disabled = j.state === "running";
+    if (j.state === "running") {
+      const pct = j.total ? Math.min(100, Math.round((j.done / j.total) * 100)) : 0;
+      box.innerHTML = `<div class="banner"><b>Importing ${esc(j.filename || "")}…</b> ${esc(j.stage || "")}${j.total ? ` (${fmt(j.done)} of ${fmt(j.total)})` : ""}
+        <div class="progress" style="margin:8px 0 2px" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
+        <div class="hint">Started by ${esc(j.user || "?")} ${esc(ago(j.started_at))}. You can leave this page; the import keeps going.</div></div>`;
+    } else if (j.state === "error") {
+      box.innerHTML = `<div class="banner bad"><b>The last import did not finish.</b> ${esc(j.error || "")}<div class="hint">${esc(j.filename || "")} · ${esc(ago(j.finished_at || j.started_at))}</div></div>`;
+    } else box.innerHTML = "";
+  };
+  const watchJob = async () => {
+    if (watching) return;
+    watching = true;
+    try {
+      for (let i = 0; i < 2400 && el.isConnected && $("#importJob"); i++) {          // up to about an hour
+        let j;
+        try { j = await api("/api/import/status"); } catch { await new Promise((r) => setTimeout(r, 3000)); continue; }   // a dropped connection is not the end of the import
+        showJob(j);
+        if (j.state !== "running") {
+          const key = j.finished_at + j.state;
+          if (announced !== key && j.finished_at && j.started_at) {                  // say the result once, whoever started the import
+            announced = key;
+            if (j.state === "done") toast(`Imported ${fmt(j.summary.products)} products (${fmt(j.summary.added)} new, ${fmt(j.summary.updated)} updated).`);
+          }
+          ctx.refreshCounts();
+          $("#settings").dataset.ready = "";
+          draw();
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    } finally { watching = false; }
+  };
   el.onchange = async (e) => {
     if (e.target.id !== "sheet" || !e.target.files[0]) return;
     const file = e.target.files[0];
     try {
-      toast("Importing…");
-      const r = await api("/api/import", await file.arrayBuffer(), { headers: { "X-Filename": encodeURIComponent(file.name) } });
-      toast(`Imported ${fmt(r.products)} products (${fmt(r.added)} new).`);
-      ctx.refreshCounts();
+      announced = null;
+      await api("/api/import/start", await file.arrayBuffer(), { headers: { "X-Filename": encodeURIComponent(file.name) } });
       e.target.value = "";
-      $("#settings").dataset.ready = "";
-      draw();
+      toast("Import started. It runs in the background.");
+      watchJob();
     } catch (err) { toast(err.message, "bad"); }
   };
   await draw();
+  try { const j = await api("/api/import/status"); showJob(j); if (j.state === "running") { announced = null; watchJob(); } else announced = j.finished_at + j.state; } catch { /* not an admin screen */ }
   timer = setInterval(() => draw().catch(() => {}), 5000);
 }

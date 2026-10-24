@@ -17,7 +17,16 @@ from fastapi import Depends, HTTPException, Request
 
 from . import db
 
-COOKIE = os.environ.get("GT_COOKIE", "gt_session")      # give every app on one server its own name, so their logins never mix
+def _cookie_name(raw: str) -> str:
+    """A cookie name may only hold letters, digits, _ . - : anything else (a space, ${APP_NAME} left unexpanded ...) is replaced,
+    so a typo in the settings can never make every sign-in crash."""
+    clean = re.sub(r"[^A-Za-z0-9_.\-]", "_", (raw or "").strip()) or "gt_session"
+    if clean != raw:
+        print(f"Warning: GT_COOKIE {raw!r} is not a valid cookie name, using {clean!r}. Fix COOKIE_NAME in your .env.", flush=True)
+    return clean
+
+
+COOKIE = _cookie_name(os.environ.get("GT_COOKIE", "gt_session"))      # give every app on one server its own name, so their logins never mix
 SESSION_DAYS = 30
 FAILED: dict[str, list[float]] = {}     # ip -> failed sign-in timestamps
 

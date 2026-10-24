@@ -17,7 +17,7 @@ services:
     environment:
       GT_PUBLIC_URL: https://${DOMAIN:?Set DOMAIN in the env file}
       GT_PORT: ${APP_PORT:-8000}
-      GT_COOKIE: ${COOKIE_NAME:-gt_session_${APP_NAME}}
+      GT_COOKIE: ${COOKIE_NAME:-gt_session}              # give each app its own name in its env file
       GT_TRUSTED_PROXY: "*"
       TZ: ${TZ:-America/New_York}
       GT_APP_NAME: ${BRAND_NAME:-Greentek Catalog}      # what this store shows in the browser tab and header

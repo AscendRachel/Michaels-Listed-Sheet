@@ -1,4 +1,4 @@
-"""Start the Greentek Catalog server, or run a maintenance command.
+﻿"""Start the Greentek Catalog server, or run a maintenance command.
 
     python run.py                          start the server
     python run.py adduser rachel --name "Rachel" --admin
@@ -54,6 +54,9 @@ def main(argv):
     args = ap.parse_args(argv)
 
     from app import auth, db
+    problem = db.check_data_writable()
+    if problem:
+        raise SystemExit("\n*** " + problem + "\n")
     db.init()
     try:
         if args.cmd == "adduser":

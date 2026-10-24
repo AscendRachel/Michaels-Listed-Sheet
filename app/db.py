@@ -35,6 +35,22 @@ _WRITE = threading.RLock()
 _local = threading.local()
 
 
+def check_data_writable() -> str:
+    """An empty string when the app may write in its data folder, otherwise a plain explanation of what to fix."""
+    fix = " In Docker: docker compose exec -u root app chown -R 10001:10001 /data  and restart. Create accounts WITHOUT -u root."
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        probe = DATA_DIR / f".write-test-{os.getpid()}"
+        probe.write_text("ok")
+        probe.unlink()
+    except OSError as e:
+        return f"The app cannot write to its data folder ({DATA_DIR}): {e.strerror or e}." + fix
+    for p in (DB_PATH, Path(str(DB_PATH) + "-wal"), Path(str(DB_PATH) + "-shm")):
+        if p.exists() and not os.access(p, os.W_OK):
+            return f"The app is not allowed to write to {p.name} in {DB_PATH.parent} (it is probably owned by another user)." + fix
+    return ""
+
+
 def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 

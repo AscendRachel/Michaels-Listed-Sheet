@@ -1,4 +1,4 @@
-"""Importing the Listed Sheet and the Michaels "Download Listing" file."""
+﻿"""Importing the Listed Sheet and the Michaels "Download Listing" file."""
 
 from __future__ import annotations
 
@@ -7,7 +7,9 @@ import io
 import json
 import re
 import secrets
+import threading
 import time
+import traceback
 from datetime import datetime
 
 from . import db, rules, titles
@@ -63,7 +65,10 @@ def map_headers(header: list[str]) -> dict[str, int]:
     return idx
 
 
-def import_products(filename: str, data: bytes, user: str) -> dict:
+def import_products(filename: str, data: bytes, user: str, progress=None) -> dict:
+    """progress(stage, done, total), when given, is called as the import moves along (the background import shows it)."""
+    note = progress or (lambda *a: None)
+    note("Reading the file", 0, 0)
     rows = read_rows(filename, data)
     header = next(rows, None)
     if not header:
@@ -108,6 +113,7 @@ def import_products(filename: str, data: bytes, user: str) -> dict:
             "sold_2025": int(to_float(g(r, "sold_2025")) or 0), "sold_2026": int(to_float(g(r, "sold_2026")) or 0),
         })
 
+    note("Saving the products", 0, len(records))
     with tx() as c:
         st = db.get_settings(c)
         pr, tf, tt = db.get_pricing(c), float(st["timeframe_days"]), float(st["title_threshold"])
@@ -115,7 +121,9 @@ def import_products(filename: str, data: bytes, user: str) -> dict:
             "SELECT sku, price, availability, delivery, run_at, title, title_ok, amazon_variation, created_in_app, ovr FROM products")}
         c.execute("UPDATE products SET active=0 WHERE COALESCE(created_in_app,0)=0")   # app-added products stay active
         added = updated = 0
-        for rec in records:
+        for n_done, rec in enumerate(records, start=1):
+            if n_done % 400 == 0:
+                note("Saving the products", n_done, len(records))
             old = existing.get(rec["sku"])
             # Keep newer scrape data already in the app; otherwise take the sheet's own values.
             if old and old["run_at"] and (not rec["run_at"] or (rules.parse_run(old["run_at"]) or datetime.min)
@@ -159,8 +167,77 @@ def import_products(filename: str, data: bytes, user: str) -> dict:
                    "not_amazon_link": not_amazon}
         c.execute("INSERT INTO imports(at, filename, summary) VALUES(?,?,?)", (now_str(), filename, json.dumps(summary)))
         log_activity(c, user, "imported the Listed Sheet", "", f"{len(records):,} products from {filename}")
+    note("Updating the word weights", len(records), len(records))
     db.rebuild_title_model()           # the catalog's words changed: relearn which ones identify a product
     return summary
+
+
+# ------------------------------------------------------------------ the import as a background job
+# A 32,000-row import takes a while on a small server. Run through a normal request, a proxy or the browser can give up
+# before the answer arrives, and the screen is left waiting although the import finished. As a job, the browser only
+# starts it and then asks how it is going; the result is kept on the server, so it can be read after a reload or a drop.
+JOB_KEY = "import_job"
+_JOB: dict = {}
+_JOB_LOCK = threading.Lock()
+
+
+def _save_job(job: dict) -> None:
+    with tx() as c:
+        db.set_setting(c, JOB_KEY, json.dumps(job))
+
+
+def job_status() -> dict:
+    with _JOB_LOCK:
+        if _JOB:
+            return dict(_JOB)
+    row = conn().execute("SELECT value FROM settings WHERE key=?", (JOB_KEY,)).fetchone()
+    try:
+        return json.loads(row["value"]) if row else {"state": "idle"}
+    except ValueError:
+        return {"state": "idle"}
+
+
+def job_reset() -> None:
+    """At startup: a job saved as running was cut off by the restart."""
+    job = job_status()
+    if job.get("state") == "running":
+        _save_job({**job, "state": "error", "finished_at": now_str(), "error": "The server restarted while this import was running. Nothing was changed; import the file again."})
+    with _JOB_LOCK:
+        _JOB.clear()
+
+
+def _run_job(filename: str, data: bytes, user: str) -> None:
+    def progress(stage, done, total):
+        with _JOB_LOCK:
+            _JOB.update({"stage": stage, "done": done, "total": total})
+    try:
+        summary = import_products(filename, data, user, progress)
+        end = {"state": "done", "summary": summary}
+    except ValueError as e:
+        end = {"state": "error", "error": str(e)}
+    except Exception as e:                                       # keep the server log's full traceback, and tell the screen what kind of problem it was
+        traceback.print_exc()
+        end = {"state": "error", "error": f"The import stopped because of an unexpected problem ({type(e).__name__}: {e}). The server log has the details."}
+    with _JOB_LOCK:
+        _JOB.update({**end, "finished_at": now_str()})
+        final = dict(_JOB)
+    _save_job(final)
+
+
+def start_job(filename: str, data: bytes, user: str) -> dict:
+    """Start importing in the background and return at once. Only one import can run at a time."""
+    if not data:
+        raise ValueError("The file is empty.")
+    with _JOB_LOCK:
+        if _JOB.get("state") == "running":
+            raise ValueError("An import is already running. Wait for it to finish.")
+        _JOB.clear()
+        _JOB.update({"state": "running", "filename": filename, "user": user, "started_at": now_str(),
+                     "stage": "Reading the file", "done": 0, "total": 0})
+        first = dict(_JOB)
+    _save_job(first)
+    threading.Thread(target=_run_job, args=(filename, data, user), daemon=True, name="import").start()
+    return first
 
 
 # ------------------------------------------------------------------ Michaels "Download Listing"

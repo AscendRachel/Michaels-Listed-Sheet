@@ -34,7 +34,12 @@ for _ext, _type in {".js": "text/javascript", ".mjs": "text/javascript", ".css":
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    problem = db.check_data_writable()
+    if problem:                                      # say what is wrong in the server log instead of failing with a vague error later
+        print("\n*** " + problem + "\n", flush=True)
+        raise RuntimeError(problem)
     db.init()
+    imports.job_reset()                              # an import that was running when the server stopped did not finish
     db.rebuild_title_model()                         # word weights for the Amazon title check
     with tx() as c:
         if db.get_settings(c).get("title_algo") != db.TITLE_ALGO:     # matching improved: re-judge every stored title once
@@ -63,6 +68,14 @@ async def _value_error(_, e: ValueError):
 @app.exception_handler(HTTPException)
 async def _http_error(_, e: HTTPException):
     return JSONResponse({"error": e.detail}, e.status_code, headers=NO_STORE)
+
+
+@app.exception_handler(Exception)
+async def _unexpected(_, e: Exception):
+    """Anything nobody planned for: answer in the same {"error": …} shape (the screens show it) instead of a bare crash page.
+    The full traceback still goes to the server log."""
+    return JSONResponse({"error": f"The server hit an unexpected problem ({type(e).__name__}). Ask your admin to check the server log."},
+                        500, headers=NO_STORE)
 
 
 @app.exception_handler(RequestValidationError)
@@ -452,6 +465,17 @@ def export_fixes(u=Depends(current_user)):
 @app.post("/api/import")
 def import_sheet(request: Request, u=Depends(admin_user), raw: bytes = Depends(rawbody)):
     return imports.import_products(unquote(request.headers.get("x-filename") or "upload.csv"), raw, u["name"])
+
+
+@app.post("/api/import/start")
+def import_start(request: Request, u=Depends(admin_user), raw: bytes = Depends(rawbody)):
+    """Start the Listed Sheet import in the background (the screen then follows /api/import/status)."""
+    return imports.start_job(unquote(request.headers.get("x-filename") or "upload.csv"), raw, u["name"])
+
+
+@app.get("/api/import/status")
+def import_status(u=Depends(current_user)):
+    return imports.job_status()
 
 
 @app.post("/api/michaels/preview")
