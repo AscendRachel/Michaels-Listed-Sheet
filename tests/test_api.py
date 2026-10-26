@@ -346,3 +346,21 @@ def test_the_import_runs_in_the_background_and_its_result_is_kept(admin, monkeyp
     auth.add_user("mem2", "Mem", "password123", "member")
     member.post("/api/login", json={"username": "mem2", "password": "password123"})
     assert member.post("/api/import/start", content=b"x").status_code == 403
+
+
+def test_the_release_number_is_on_the_sign_in_page_and_matches_the_version_file():
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from app.main import app
+    number = (Path(__file__).resolve().parent.parent / "VERSION").read_text(encoding="utf-8").strip()
+    assert number and number.count(".") == 2
+    c = TestClient(app)
+    assert f"Version {number}" in c.get("/login").text            # visible before anyone signs in
+    assert c.get("/api/ping").json()["version"] == number
+
+
+def test_the_version_file_is_in_the_docker_image():
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    assert "VERSION" in (root / "Dockerfile").read_text(encoding="utf-8")
+    assert "VERSION" not in (root / ".dockerignore").read_text(encoding="utf-8")

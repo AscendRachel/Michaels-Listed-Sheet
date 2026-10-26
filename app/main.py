@@ -15,7 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, brand, catalog, db, imports, protect, scraper, sheet, sold, work
+from . import auth, brand, catalog, db, imports, protect, scraper, sheet, sold, version, work
 from .auth import admin_user, current_user
 from .db import ROOT, conn, now_str, tx
 
@@ -141,7 +141,7 @@ app.mount("/static", StaticFiles(directory=WEB / "static"), name="static")
 # ------------------------------------------------------------------ session
 @app.get("/api/ping")
 def ping():
-    return {"ok": True, "server_time": now_str(), "utc_offset_minutes": db.utc_offset_minutes()}
+    return {"ok": True, "server_time": now_str(), "utc_offset_minutes": db.utc_offset_minutes(), "version": version.VERSION}
 
 
 @app.get("/api/setup-needed")
@@ -206,7 +206,7 @@ def change_password(request: Request, u=Depends(current_user), b: dict = Depends
 # ------------------------------------------------------------------ catalog
 @app.get("/api/meta")
 def meta(u=Depends(current_user)):
-    return {**catalog.meta(), "me": u, "locks": protect.all_locks(), "brand": brand.get(), "utc_offset_minutes": db.utc_offset_minutes()}
+    return {**catalog.meta(), "me": u, "locks": protect.all_locks(), "brand": brand.get(), "utc_offset_minutes": db.utc_offset_minutes(), "version": version.VERSION}
 
 
 @app.post("/api/brand")

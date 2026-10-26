@@ -17,7 +17,7 @@ RUN pip install -r requirements.txt -c constraints.txt
 
 COPY app ./app
 COPY web ./web
-COPY run.py .
+COPY run.py VERSION ./
 
 # GT_PORT is the port INSIDE the container (any value works; the proxy is told the same number).
 ENV GT_DATA=/data GT_HOST=0.0.0.0 GT_PORT=8000 TZ=America/New_York

@@ -12,7 +12,7 @@ import os
 import re
 import urllib.parse
 
-from . import db
+from . import db, version
 from .db import conn, log_activity, now_str, tx
 
 DEFAULT_NAME = "Greentek Catalog"
@@ -129,4 +129,5 @@ def render(page: str, b: dict | None = None) -> str:
     """Fill the {{…}} placeholders of a page with this store's name, logo and colour."""
     b = b or get()
     return (page.replace("{{APP_NAME}}", html.escape(b["name"])).replace("{{LOGO_HTML}}", logo_html(b))
-            .replace("{{ICON_HREF}}", html.escape(icon_href(b), quote=True)).replace("{{BRAND_STYLE}}", style_block(b)))
+            .replace("{{ICON_HREF}}", html.escape(icon_href(b), quote=True)).replace("{{BRAND_STYLE}}", style_block(b))
+            .replace("{{VERSION}}", html.escape(version.VERSION)))
