@@ -1,4 +1,4 @@
-﻿"""SQLite access, schema and settings.
+"""SQLite access, schema and settings.
 
 The schema is a superset of the earlier "GreentekOptimizer" database, so an existing
 optimizer.db opens as-is: missing columns are added and the new computed columns are
@@ -156,7 +156,7 @@ DEFAULT_SETTINGS = {"zip_code": "32809", "timeframe_days": "6", "delay_min_secon
                     "history_days": "180", "title_threshold": "50",
                     # words the team treats as the same thing when comparing titles, one group per line: "sticker, decal"
                     "title_synonyms": ""}
-STATUS_ALGO = "2"       # bump when compute_status changes: every stored status is re-derived once at startup
+STATUS_ALGO = "3"       # bump when compute_status changes: every stored status is re-derived once at startup
 TITLE_ALGO = "2"       # bump when the title matching changes: every stored title verdict is recomputed once
 
 
@@ -175,6 +175,8 @@ def init() -> None:
         for col in ("issue_before", "issue_after", "changes"):
             if col not in _columns(c, "activity"):
                 c.execute(f"ALTER TABLE activity ADD COLUMN {col} TEXT")
+        if "kind" not in _columns(c, "runs"):
+            c.execute("ALTER TABLE runs ADD COLUMN kind TEXT")                 # NULL = a full run, "recheck" = only the rows someone asked to check again
         c.execute("CREATE INDEX IF NOT EXISTS ix_activity_at ON activity(at)")
         if "title" not in _columns(c, "history"):
             c.execute("ALTER TABLE history ADD COLUMN title TEXT")

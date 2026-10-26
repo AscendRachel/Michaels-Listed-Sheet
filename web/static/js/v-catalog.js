@@ -1,4 +1,4 @@
-﻿// Catalog as a spreadsheet: the Listed Sheet's columns, select / type / copy / paste / fill, filter views that
+// Catalog as a spreadsheet: the Listed Sheet's columns, select / type / copy / paste / fill, filter views that
 // don't drop rows while you work, undo, and one-click bulk actions.
 import { $, STATUS, ago, api, confirmBox, debounce, dialog, esc, fmt, money, priceFor, qs, store, toast } from "./util.js";
 import { openDrawer } from "./drawer.js";
@@ -226,6 +226,22 @@ function filterParams() {
   for (const [k, v] of Object.entries(S.F.cf)) if (v) p["cf_" + k] = v;
   return p;
 }
+// Ctrl+click / Ctrl+drag keep earlier blocks in S.multi; S.sel is always the block being worked on (the active cell is in it).
+const rects = () => (S.sel ? [...S.multi, normSel()] : []);
+const inRects = (rs, r, c) => rs.some((x) => r >= x.r1 && r <= x.r2 && c >= x.c1 && c <= x.c2);
+function* pickedCells() {                                        // every highlighted cell once, even where blocks overlap
+  const seen = new Set();
+  for (const x of rects()) for (let r = x.r1; r <= x.r2; r++) for (let c = x.c1; c <= x.c2; c++) { const k = r * 4096 + c; if (!seen.has(k)) { seen.add(k); yield { r, c }; } }
+}
+// The dashed border Google Sheets draws round what you just copied: each cell on the outside edge of a copied block gets a side class.
+function copyEdges(rs, r, c) {
+  let s = "";
+  for (const x of rs) {
+    if (r < x.r1 || r > x.r2 || c < x.c1 || c > x.c2) continue;
+    s += ` cp${r === x.r1 ? " cp-t" : ""}${r === x.r2 ? " cp-b" : ""}${c === x.c1 ? " cp-l" : ""}${c === x.c2 ? " cp-r" : ""}`;
+  }
+  return s;
+}
 const normSel = () => {
   if (!S.sel) return null;
   const { r1, c1, r2, c2 } = S.sel;
@@ -240,7 +256,7 @@ export async function mount(host, hashParams, c) {
   const widths = (() => { try { return JSON.parse(store.get("gt_col_w", "{}")); } catch { return {}; } })();
   S = { ids: [], cache: new Map(), sel: null, dim: new Set(), undo: [], redo: [], hidden, widths, views: [], taken: "", busy: false,
         F: { q: hashParams.get("q") || "", queue: hashParams.get("queue") || "", sort: hashParams.get("sort") || "", cf: {} },
-        edit: null, drag: false, focused: false, fetching: new Set(), drafts: [], draftMap: new Map(), draftSeq: 0, draftAlias: new Map(), work: null, touched: new Set(), saving: false, resave: false, fill: null };
+        edit: null, drag: false, focused: false, fetching: new Set(), drafts: [], draftMap: new Map(), draftSeq: 0, draftAlias: new Map(), work: null, touched: new Set(), saving: false, resave: false, fill: null, multi: [], add: false, copied: null };
   for (const [k, v] of hashParams) if (k.startsWith("cf_")) S.F.cf[k.slice(3)] = v;  S.views = (await api("/api/views")).items;
   await ctx.refreshMeta();
   try { for (const d of JSON.parse(store.get("gt_drafts", "[]"))) newDraft(d); } catch { /* nothing saved */ }       // unsaved new rows survive a reload
@@ -431,19 +447,21 @@ function visibleRange() {
 
 function render() {
   const [a, b] = visibleRange();
-  const cols = visCols(), xs = colX(), sel = normSel();
+  const cols = visCols(), xs = colX(), sel = normSel(), rs = rects();
+  if (S.copied && S.copied.n !== S.ids.length) S.copied = null;          // the rows moved: the dashed border no longer points at the right cells
+  const cpy = S.copied?.rects;
   const act = S.sel ? { r: S.sel.r2, c: S.sel.c2 } : null;
   let html = "";
   for (let i = a; i <= b; i++) {
     const row = rowAt(i);
-    const rowSel = sel && i >= sel.r1 && i <= sel.r2;
+    const rowSel = rs.some((x) => i >= x.r1 && i <= x.r2 && x.c1 === 0 && x.c2 === cols.length - 1);
     const draft = !!row?._draft;
-    html += `<div class="gr ${S.dim.has(S.ids[i]) ? "gone" : ""} ${S.touched.has(S.ids[i]) ? "touched" : ""} ${draft ? "draft" : ""} ${row?._err ? "bad" : ""}" style="top:${i * RH}px;width:${totalW()}px">
-      <div class="gc rn ${rowSel && sel.c1 === 0 && sel.c2 === cols.length - 1 ? "s" : ""}" data-r="${i}" data-c="-1" style="width:${NUM_W}px" title="${draft ? esc(row._err || "A new row: fill it in, then press Save new rows") : "Click to select row · double-click for details"}">${draft ? (draftBlank(row) ? "＋" : "new") : i + 1}</div>`;
+    html += `<div class="gr ${S.dim.has(S.ids[i]) ? "gone" : ""} ${S.touched.has(S.ids[i]) ? "touched" : ""} ${row && !draft && !row.inventory && (S.dim.has(S.ids[i]) || S.touched.has(S.ids[i])) ? "invoff" : ""} ${draft ? "draft" : ""} ${row?._err ? "bad" : ""}" style="top:${i * RH}px;width:${totalW()}px">
+      <div class="gc rn ${rowSel ? "s" : ""}" data-r="${i}" data-c="-1" style="width:${NUM_W}px" title="${draft ? esc(row._err || "A new row: fill it in, then press Save new rows") : "Click to select row · double-click for details"}">${draft ? (draftBlank(row) ? "＋" : "new") : i + 1}</div>`;
     cols.forEach((c, ci) => {
-      const inSel = sel && i >= sel.r1 && i <= sel.r2 && ci >= sel.c1 && ci <= sel.c2;
+      const inSel = inRects(rs, i, ci);
       const isAct = act && act.r === i && act.c === ci;
-      const cls = `gc ${c.r || c.t === "num" || c.t === "money" || c.t === "pct" ? "r" : ""} ${c.t === "bool" ? "ctr" : ""} ${c.pin ? "pin" : ""} ${c.calc ? "calc" : ""} ${blockedMsg(c.k) ? "ro locked" : ""} ${row?._ovr?.includes(c.k) ? "ov" : ""} ${inSel ? "s" : ""} ${isAct ? "a" : ""}`;
+      const cls = `gc ${c.r || c.t === "num" || c.t === "money" || c.t === "pct" ? "r" : ""} ${c.t === "bool" ? "ctr" : ""} ${c.pin ? "pin" : ""} ${c.calc ? "calc" : ""} ${blockedMsg(c.k) ? "ro locked" : ""} ${row?._ovr?.includes(c.k) ? "ov" : ""} ${inSel ? "s" : ""} ${isAct ? "a" : ""} ${cpy ? copyEdges(cpy, i, ci) : ""}`;
       let inner = "";
       if (row) {
         if (c.t === "amzimg") inner = row.amazon_image
@@ -516,6 +534,7 @@ function drawViews() {
 // ------------------------------------------------------------------ selection & movement
 function setSel(r1, c1, r2 = r1, c2 = c1, scroll = true) {
   const nr = S.ids.length - 1, nc = visCols().length - 1;
+  if (!S.add) S.multi = [];                                   // a plain click or arrow key drops the extra (Ctrl-picked) blocks
   S.sel = { r1: Math.max(0, Math.min(nr, r1)), c1: Math.max(0, Math.min(nc, c1)), r2: Math.max(0, Math.min(nr, r2)), c2: Math.max(0, Math.min(nc, c2)) };
   if (scroll) reveal(S.sel.r2, S.sel.c2);
   render();
@@ -767,8 +786,21 @@ async function finishWork() {
 }
 
 async function discardWork(id, name) {
-  if (!(await confirmBox(`Discard “${name}”?`, "The list is closed without confirming it. The products themselves are not changed.", "Discard"))) return;
-  try { await api(`/api/work/${id}/discard`, {}); } catch (e) { return toast(e.message, "bad"); }
+  let pv;
+  try { pv = await api(`/api/work/${id}/revert-preview`); } catch (e) { return toast(e.message, "bad"); }
+  const lines = [];
+  if (pv.cells) lines.push(`${fmt(pv.cells)} change${pv.cells === 1 ? "" : "s"} in ${fmt(pv.products)} product${pv.products === 1 ? "" : "s"} will be put back to how they were when you started.`);
+  else lines.push("You haven't changed anything in this list that can be undone.");
+  if (pv.conflicts) lines.push(`${fmt(pv.conflicts)} cell${pv.conflicts === 1 ? " was" : "s were"} changed again by someone else (or the scraper) since, so ${pv.conflicts === 1 ? "it" : "they"} stay as they are.`);
+  if (pv.unrecorded) lines.push(`${fmt(pv.unrecorded)} older edit${pv.unrecorded === 1 ? " has" : "s have"} no saved before-value and can't be undone.`);
+  const actions = [["Cancel", "close"]];
+  if (pv.cells) actions.push(["Discard, keep my changes", "keep"]);
+  actions.push(pv.cells ? ["Undo my changes and discard", "undo", "primary"] : ["Discard", "keep", "primary"]);
+  const choice = (await dialog({ title: `Discard “${name}”?`, body: `<p>${esc(lines.join(" "))}</p>`, actions })).value;
+  if (choice !== "undo" && choice !== "keep") return;
+  let res;
+  try { res = await api(`/api/work/${id}/discard`, { revert: choice === "undo" }); } catch (e) { return toast(e.message, "bad"); }
+  if (res.undone) toast(`Undid ${fmt(res.undone)} change${res.undone === 1 ? "" : "s"} in ${fmt(res.products)} product${res.products === 1 ? "" : "s"}.`);
   pendingWork = pendingWork.filter((x) => x.id !== id);
   if (S.work?.id === id) { leaveWork(false); loadView(true); } else drawWorkBar();
 }
@@ -1049,6 +1081,7 @@ function closeEditor(commit) {
 
 async function doEdits(edits, opts = {}) {
   if (!edits.length) return null;
+  if (S.copied && opts.label !== "paste") S.copied = null;                  // typing or clearing ends the dashed "copied" border; pasting keeps it, as in Sheets
   const lockedEdits = edits.filter((e) => blockedMsg(e.field));      // paste, fill and Delete never touch a column that is protected against me
   if (lockedEdits.length) {
     edits = edits.filter((e) => !blockedMsg(e.field));
@@ -1142,8 +1175,8 @@ function parseTSV(text) {
 }
 const tsvCell = (s) => (/[\t\n"]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s);
 
-async function selectionText() {
-  const sel = normSel(), cols = visCols();
+async function selectionText(sel = normSel()) {
+  const cols = visCols();
   await ensureRows(sel.r1, sel.r2);
   const lines = [];
   for (let r = sel.r1; r <= sel.r2; r++) {
@@ -1157,14 +1190,14 @@ async function selectionText() {
 async function toggleChecks() {
   if (!S.sel) return;
   const sel = normSel(), cols = visCols();
-  const boolCols = cols.slice(sel.c1, sel.c2 + 1).filter((c) => c.t === "bool");
-  if (!boolCols.length) return;
-  statusLine(`Loading ${fmt(sel.r2 - sel.r1 + 1)} rows…`);
-  await ensureRows(sel.r1, sel.r2);
+  const picked = [...pickedCells()].filter((p) => cols[p.c].t === "bool");
+  if (!picked.length) return;
+  statusLine(`Loading ${fmt(new Set(picked.map((p) => p.r)).size)} rows…`);
+  for (const x of rects()) await ensureRows(x.r1, x.r2);
   const cells = [];
-  for (let r = sel.r1; r <= sel.r2; r++) {
-    const row = rowAt(r);
-    if (row) for (const c of boolCols) cells.push({ sku: row.sku, field: c.k, on: !!row[c.k] });
+  for (const p of picked) {
+    const row = rowAt(p.r);
+    if (row) cells.push({ sku: row.sku, field: cols[p.c].k, on: !!row[cols[p.c].k] });
   }
   if (!cells.length) return;
   const value = cells.every((x) => x.on) ? "FALSE" : "TRUE";
@@ -1185,15 +1218,21 @@ function legacyCopy(text) {
 }
 async function copySelection(cut) {
   if (!S.sel) return;
-  const sel = normSel();
-  const cells = (sel.r2 - sel.r1 + 1) * (sel.c2 - sel.c1 + 1);
+  const rs = rects();
+  const sameRows = rs.every((x) => x.r1 === rs[0].r1 && x.r2 === rs[0].r2), sameCols = rs.every((x) => x.c1 === rs[0].c1 && x.c2 === rs[0].c2);
+  if (rs.length > 1 && !sameRows && !sameCols) return toast("Can't copy several blocks unless they share the same rows or the same columns.", "bad");
+  const cells = rs.reduce((n, x) => n + (x.r2 - x.r1 + 1) * (x.c2 - x.c1 + 1), 0);
   statusLine(`Copying ${fmt(cells)} cells…`);
-  const text = await selectionText();
+  // blocks that share rows are laid side by side, blocks that share columns are stacked (what Google Sheets does)
+  const parts = [];
+  for (const x of rs.slice().sort((a, b) => a.r1 - b.r1 || a.c1 - b.c1)) parts.push(await selectionText(x));
+  const text = rs.length > 1 && sameRows ? parts.map((p) => p.split("\n")).reduce((a, b) => a.map((l, i) => l + "\t" + b[i])).join("\n") : parts.join("\n");
   let ok = false;
   try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); ok = true; } } catch {}
   if (!ok) ok = legacyCopy(text);
   statusLine(ok ? `Copied ${fmt(cells)} cell${cells === 1 ? "" : "s"}.` : "Couldn't copy. Your browser blocked clipboard access.");
-  if (ok && cut) clearCells();
+  if (ok && cut) { S.copied = null; clearCells(); }
+  else if (ok) { S.copied = { rects: rs.map((x) => ({ ...x })), n: S.ids.length }; render(); }
 }
 
 async function pasteText(text) {
@@ -1222,8 +1261,8 @@ async function pasteText(text) {
 }
 
 async function clearCells() {
-  const sel = normSel(), cols = visCols(), edits = [];
-  for (let r = sel.r1; r <= sel.r2; r++) for (let c = sel.c1; c <= sel.c2; c++) if ((isDraft(S.ids[r]) || !["sku", "name"].includes(cols[c].k)) && cols[c].t !== "bool" && cols[c].t !== "img" && cols[c].t !== "amzimg") edits.push({ sku: S.ids[r], field: cols[c].k, value: "" });
+  const cols = visCols(), edits = [];
+  for (const { r, c } of pickedCells()) if ((isDraft(S.ids[r]) || !["sku", "name"].includes(cols[c].k)) && cols[c].t !== "bool" && cols[c].t !== "img" && cols[c].t !== "amzimg") edits.push({ sku: S.ids[r], field: cols[c].k, value: "" });
   if (edits.length > 300 && !(await confirmBox(`Clear ${fmt(edits.length)} cells?`, "You can undo this with Ctrl+Z.", "Clear"))) return;
   await doEdits(edits, { label: "clear" });
 }
@@ -1259,7 +1298,7 @@ function openMenu() {
     <button data-act="set:category">Set CATEGORY…</button><button data-act="set:remarks">Set OPTIMIZER REMARKS…</button>
     <hr><button data-act="flag:inventory:TRUE">Inventory ON</button><button data-act="flag:inventory:FALSE">Inventory OFF</button>
     <button data-act="flag:listed:TRUE">Mark Listed</button><button data-act="flag:listed:FALSE">Mark not Listed</button>
-    <hr><button data-act="accept_title">Titles are fine (hide mismatch)</button>
+    <hr><button data-act="recheck">Check again on Amazon (scraper)</button><button data-act="accept_title">Titles are fine (hide mismatch)</button>
     <hr><button data-act="restore">Restore deleted products…</button><button data-act="delete" class="danger">Delete the selected rows…</button>`;
   menu.classList.toggle("hidden");
 }
@@ -1282,6 +1321,12 @@ async function runAction(act) {
     render();
     toast(`${fmt(res.changed)} source price${res.changed === 1 ? "" : "s"} updated${res.skipped_no_price ? `, ${fmt(res.skipped_no_price)} skipped (no Amazon price)` : ""}.`);
     ctx.refreshCounts();
+    return;
+  }
+  if (act === "recheck") {
+    if (!(await confirmBox(`Check ${fmt(sc.skus.length)} product${sc.skus.length === 1 ? "" : "s"} on Amazon again?`, `For ${sc.label}. They go to the front of the scraper queue. A scraper PC does the checking, so if no scraper is running, press Start on one. The new results replace the old ones.`, "Check again"))) return;
+    const r = await api("/api/scraper/recheck", { skus: sc.skus }).catch((e) => { toast(e.message, "bad"); return null; });
+    if (r) toast(`${fmt(r.queued)} queued for a re-check${r.skipped_no_link ? ` (${fmt(r.skipped_no_link)} have no Amazon link)` : ""}. ${r.joined_open_run ? "They are first in line in the current run." : "Press Start on a scraper PC to begin."}`);
     return;
   }
   if (act === "accept_title") {
@@ -1313,7 +1358,7 @@ function wire() {
   if (!wired) {          // document-level handlers are added once; they always act on the current grid
     wired = true;
     addEventListener("resize", () => el.scroller?.isConnected && fitHeight());
-    addEventListener("mouseup", () => S && (S.drag = false));
+    addEventListener("mouseup", () => { if (S) { S.drag = false; S.add = false; } });
     document.addEventListener("keydown", (e) => {                  // Ctrl+Z / Ctrl+Y work even when the grid doesn't have the focus (for example right after a dialog closes)
       if (!el.scroller?.isConnected || el.scroller.contains(e.target) || document.querySelector("dialog[open]")) return;
       if (e.target.closest?.("input, select, textarea") || !(e.ctrlKey || e.metaKey) || e.altKey) return;
@@ -1362,6 +1407,9 @@ function wire() {
       openImages(cell.r);
       return;
     }
+    const add = (e.ctrlKey || e.metaKey) && !e.shiftKey && !!S.sel;       // Ctrl+click: add another block, keep the ones already picked
+    const keep = add ? rects() : null;
+    S.add = add;
     if (cell.c === -1) {                       // row number: select the whole row
       if (e.shiftKey && S.sel) setSel(S.sel.r1, 0, cell.r, cols.length - 1, false); else setSel(cell.r, 0, cell.r, cols.length - 1, false);
       S.drag = "row";
@@ -1369,6 +1417,7 @@ function wire() {
       if (e.shiftKey && S.sel) setSel(S.sel.r1, S.sel.c1, cell.r, cell.c, false); else setSel(cell.r, cell.c, cell.r, cell.c, false);
       S.drag = "cell";
     }
+    if (keep) { S.multi = keep; render(); }
     sc.focus();
     e.preventDefault();
   });
@@ -1405,7 +1454,7 @@ function wire() {
     if (hm) { const r = hm.getBoundingClientRect(); return openHeaderMenu(+hm.dataset.hm, r.left, r.bottom); }
     if (e.target.closest("[data-corner]")) return S.ids.length && setSel(0, 0, S.ids.length - 1, visCols().length - 1, false);
     const hc = e.target.closest("[data-hc]");
-    if (hc && !e.target.closest("input,select,.rz,button") && S.ids.length) { const i = +hc.dataset.hc; setSel(0, i, S.ids.length - 1, i, false); sc.focus(); }
+    if (hc && !e.target.closest("input,select,.rz,button") && S.ids.length) { const i = +hc.dataset.hc, keep = (e.ctrlKey || e.metaKey) && S.sel ? rects() : null; S.add = !!keep; setSel(0, i, S.ids.length - 1, i, false); S.add = false; if (keep) { S.multi = keep; render(); } sc.focus(); }
   });
   el.head.addEventListener("contextmenu", (e) => {
     const hc = e.target.closest("[data-hc]");
@@ -1459,9 +1508,9 @@ function wire() {
     if (k === "Enter" || k === "F2") { e.preventDefault(); return startEdit(S.sel.r2, S.sel.c2); }
     if (k === " " && e.shiftKey && !mod) { e.preventDefault(); return setSel(S.sel.r1, 0, S.sel.r2, visCols().length - 1, false); }   // Shift+Space: whole row(s)
     if (k === " " && mod) { e.preventDefault(); return setSel(0, S.sel.c1, S.ids.length - 1, S.sel.c2, false); }                      // Ctrl+Space: whole column(s)
-    if (k === " " && !e.altKey && visCols().slice(normSel().c1, normSel().c2 + 1).some((c) => c.t === "bool")) { e.preventDefault(); return toggleChecks(); }
+    if (k === " " && !e.altKey && rects().some((x) => visCols().slice(x.c1, x.c2 + 1).some((c) => c.t === "bool"))) { e.preventDefault(); return toggleChecks(); }
     if (k === "Delete" || k === "Backspace") { e.preventDefault(); return clearCells(); }
-    if (k === "Escape") { S.sel = { ...S.sel, r1: S.sel.r2, c1: S.sel.c2 }; return render(); }
+    if (k === "Escape") { S.multi = []; S.copied = null; S.sel = { ...S.sel, r1: S.sel.r2, c1: S.sel.c2 }; return render(); }
     if (k.length === 1 && !mod && !e.altKey) { e.preventDefault(); startEdit(S.sel.r2, S.sel.c2, k); }
   });
   // toolbar

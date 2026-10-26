@@ -1,4 +1,4 @@
-"""Work lists: a saved, frozen list of rows someone is working through (for example every High Price row).
+﻿"""Work lists: a saved, frozen list of rows someone is working through (for example every High Price row).
 
 Why: while an issue is being resolved row by row, a row that stops matching the filter would normally drop out of the
 view, and after a power cut or a reload nobody knows which rows were already done. A work list is saved on the server:
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 
-from . import db, sheet
+from . import catalog, db, protect, sheet
 from .db import conn, log_activity, now_str, tx
 
 MAX_ROWS = 60000
@@ -90,9 +90,85 @@ def finish(user: dict, list_id: int, force: bool = False) -> dict:
         return {"ok": True, **summary}
 
 
-def discard(user: dict, list_id: int) -> dict:
+# ------------------------------------------------------------------ undoing a person's changes
+# Every edit is saved the moment it is made (other people use the same catalog), so "discard" has to undo them one by
+# one. The activity log keeps the old and new value of every cell change, so the undo puts back the value the cell had
+# when the list was started, but only where the cell still holds what THIS person set: a cell someone else (or the
+# scraper) has changed since is left alone and reported.
+NOT_UNDONE = {"sku", "title_check"}
+
+
+def _norm(v):
+    if v is None or v == "":
+        return ""
+    if isinstance(v, (bool, int, float)):
+        return round(float(v), 6)
+    s = str(v).strip()
+    try:
+        return round(float(s.replace("$", "").replace(",", "")), 6)
+    except ValueError:
+        return s
+
+
+def _plan(c, r) -> tuple[list, list, int]:
+    """(cells to put back as [(sku, field, value_at_start)], cells that changed again since, edits with no record to undo)."""
+    skus = set(json.loads(r["skus"]))
+    events: dict = {}
+    unrecorded = 0
+    for a in c.execute("""SELECT sku, changes, action FROM activity WHERE user=? AND at>=? AND sku<>''
+                          AND action NOT IN ('added','deleted','restored') ORDER BY id ASC""", (r["user_name"], r["created_at"])):
+        if a["sku"] not in skus:
+            continue
+        if not a["changes"]:
+            unrecorded += 1
+            continue
+        for ch in json.loads(a["changes"]):
+            if ch.get("f") not in NOT_UNDONE:
+                events.setdefault((a["sku"], ch["f"]), []).append((ch.get("o"), ch.get("n")))
+    current: dict = {}
+    names = sorted({s for s, _ in events})
+    for i in range(0, len(names), 300):
+        for row in sheet.rows(names[i:i + 300]):
+            current[row["sku"]] = row
+    todo, conflicts = [], []
+    for (sku, f), seq in events.items():
+        row = current.get(sku)
+        if row is None:                                              # deleted since: nothing to put back
+            continue
+        has_value = f not in sheet.OVERRIDABLE or f in row.get("_ovr", [])      # a typed override only counts if it is still typed
+        cur = row.get(f) if has_value else None
+        first_old, last_new = seq[0][0], seq[-1][1]
+        if _norm(cur) == _norm(first_old):
+            continue                                                 # already as it was at the start
+        if _norm(cur) == _norm(last_new):
+            todo.append((sku, f, first_old))
+        else:
+            conflicts.append((sku, f))
+    return todo, conflicts, unrecorded
+
+
+def revert_preview(user: dict, list_id: int) -> dict:
+    c = conn()
+    todo, conflicts, unrecorded = _plan(c, _own(c, list_id, user))
+    return {"cells": len(todo), "products": len({t[0] for t in todo}), "conflicts": len(conflicts), "unrecorded": unrecorded}
+
+
+def discard(user: dict, list_id: int, revert: bool = False) -> dict:
+    """Close a work list without confirming it. With revert=True the changes this person made to its rows are undone first."""
+    out = {"ok": True, "undone": 0, "products": 0, "left_alone": 0, "protected": 0}
+    if revert:
+        c = conn()
+        r = _own(c, list_id, user)
+        todo, conflicts, _ = _plan(c, r)
+        edits = [{"sku": s, "field": f, "value": "" if _norm(v) == "" else ("TRUE" if _norm(v) == 1.0 else "FALSE") if catalog.EDITABLE.get(f) is bool
+                  else ("" if v is None else v)} for s, f, v in todo]
+        keep, blocked = protect.filter_edits(user, edits)
+        res = sheet.apply_cells(keep, user["name"], None, action="undid a work list") if keep else {"changed": 0, "error_count": 0}
+        out.update({"undone": len(keep) - res["error_count"], "products": res["changed"],
+                    "left_alone": len(conflicts) + res["error_count"], "protected": len(blocked)})
     with tx() as c:
         r = _own(c, list_id, user)
-        c.execute("UPDATE worklists SET state='discarded', finished_at=? WHERE id=?", (now_str(), list_id))
-        log_activity(c, user["name"], "discarded a work list", "", r["name"])
-    return {"ok": True}
+        c.execute("UPDATE worklists SET state='discarded', finished_at=?, summary=? WHERE id=?", (now_str(), json.dumps(out), list_id))
+        log_activity(c, user["name"], "discarded a work list", "",
+                     r["name"] + (f": undid {out['undone']:,} changes in {out['products']:,} products, left {out['left_alone']:,} alone" if revert else ""))
+    return out

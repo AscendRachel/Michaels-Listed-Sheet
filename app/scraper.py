@@ -1,4 +1,4 @@
-﻿"""Scraper coordination: runs, work hand-out to scraper PCs, results, dashboard data, settings and backups.
+"""Scraper coordination: runs, work hand-out to scraper PCs, results, dashboard data, settings and backups.
 
 The scraper PCs speak the same /api/agent/* protocol as the earlier version, so the existing
 scraper app keeps working unchanged.
@@ -59,6 +59,40 @@ def _create_run(c, started_by: str) -> int:
     return run_id
 
 
+def recheck(skus: list, user: str) -> dict:
+    """Check these products on Amazon again, ahead of everything else.
+    A run is already open: the rows jump to the front of it (rows already checked in it are queued once more).
+    No run is open: a small run with only these rows is created; a scraper PC joins it when someone presses Start."""
+    wanted = list(dict.fromkeys(str(s) for s in skus))
+    if not wanted:
+        raise ValueError("There are no rows to check again.")
+    with tx() as c:
+        ok = []
+        for i in range(0, len(wanted), 500):
+            part = wanted[i:i + 500]
+            ok += [r["sku"] for r in c.execute(
+                f"SELECT sku FROM products WHERE active=1 AND link LIKE '%amazon.%' AND sku IN ({','.join('?' * len(part))})", part)]
+        if not ok:
+            raise ValueError("None of these rows has an Amazon link to check.")
+        skipped = len(wanted) - len(ok)
+        run = c.execute("SELECT * FROM runs WHERE state='open' ORDER BY id DESC LIMIT 1").fetchone()
+        if run:
+            run_id, joined = run["id"], True
+        else:
+            run_id = c.execute("INSERT INTO runs(started_at, started_by, total, state, kind) VALUES(?,?,0,'open','recheck')",
+                               (now_str(), user)).lastrowid
+            joined = False
+        front = -len(ok)                                            # a negative position puts them before every queued row
+        for n, sku in enumerate(ok):
+            c.execute("""INSERT INTO tasks(run_id, sku, seq, state, attempts) VALUES(?,?,?,'pending',0)
+                ON CONFLICT(run_id, sku) DO UPDATE SET seq=excluded.seq, attempts=0, result=NULL,
+                  state=CASE WHEN tasks.state='claimed' THEN tasks.state ELSE 'pending' END""", (run_id, sku, front + n))
+        total = c.execute("SELECT COUNT(*) FROM tasks WHERE run_id=?", (run_id,)).fetchone()[0]
+        c.execute("UPDATE runs SET total=? WHERE id=?", (total, run_id))
+        log_activity(c, user, "asked for a re-check on Amazon", "", f"{len(ok):,} products")
+    return {"ok": True, "queued": len(ok), "skipped_no_link": skipped, "joined_open_run": joined, "run_id": run_id}
+
+
 def _touch_agent(c, agent_id, name, state, workers=None, run_id=None, message=None, done=None, captchas=None, rate=None):
     c.execute("""INSERT INTO agents(id, name, state, workers, last_seen, run_id, done_session, captchas, rate, message)
         VALUES(?,?,?,?,?,?,?,?,?,?)
@@ -82,7 +116,7 @@ def agent_start(body: dict) -> dict:
         if run:
             action, run_id = "joined", run["id"]
         else:
-            last = c.execute("SELECT * FROM runs WHERE state='done' ORDER BY id DESC LIMIT 1").fetchone()
+            last = c.execute("SELECT * FROM runs WHERE state='done' AND kind IS NULL ORDER BY id DESC LIMIT 1").fetchone()
             recent = last and last["finished_at"] and \
                 datetime.now() - (rules.parse_run(last["finished_at"]) or datetime.min) < timedelta(hours=CONFIRM_NEW_WITHIN_HOURS)
             if recent and not body.get("confirm_new"):

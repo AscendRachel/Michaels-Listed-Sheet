@@ -47,6 +47,13 @@ def test_timeframe_beats_everything():
     assert compute_status(p, 30) == "Out of Stock"
 
 
+def test_unchecking_inventory_resolves_a_timeframe_issue():
+    slow = dict(delivery="Delivery January 20", run_at="2026-01-05 10:00:00")
+    assert compute_status(P(**slow), 6) == "TimeFrame"
+    assert compute_status(P(inventory=0, **slow), 6) != "TimeFrame"          # unchecked: not a TimeFrame issue any more
+    assert compute_status(P(inventory=0, availability="", **slow), 6) == "Not checked"
+
+
 def test_lead_days_year_rollover():
     d = rules.lead_days("Delivery January 3", "2025-12-30 00:00:00")
     assert d == 4.0

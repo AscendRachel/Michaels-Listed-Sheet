@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   --bg: #f6f7f5; --panel: #ffffff; --ink: #1c2420; --muted: #66726b; --line: #e1e6e2; --soft: #eef2ee;
   --brand: #1f7a4d; --brand-ink: #ffffff; --brand-soft: #e3f3ea;
   --crit: #b42318; --crit-bg: #fde8e6; --warn: #8a5a00; --warn-bg: #fdf0d3; --info: #1d5fa8; --info-bg: #e2eefb;
@@ -203,7 +203,8 @@ main:has(.sheetpage) { max-width: none; padding-top: 14px; padding-bottom: 20px;
 .gc.a { outline: 2px solid var(--brand); outline-offset: -2px; background: var(--panel); z-index: 4; }
 .gc.pin.a { z-index: 5; }              /* a selected cell scrolls UNDER the frozen columns, never over them */
 .gc .pill { line-height: 1.5; }
-.gr.gone .gc { opacity: .5; }
+/* a row that was fixed or edited is not faded; only one whose Inventory got unchecked gets a soft tint */
+.gr.invoff .gc:not(.s):not(.a) { background: var(--warn-bg); }
 .gr.gone .gc.rn::after { content: "•"; color: var(--warn); margin-left: 2px; }
 .editor { position: absolute; z-index: 4; box-sizing: border-box; border: 2px solid var(--brand); border-radius: 0; padding: 0 8px; font-size: 13px; background: var(--panel); }
 .statusbar { display: flex; justify-content: space-between; gap: 16px; padding: 6px 10px; color: var(--muted); font-size: 12.5px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 8px 8px; background: var(--soft); }
@@ -314,3 +315,10 @@ main:has(.sheetpage) { max-width: none; padding-top: 14px; padding-bottom: 20px;
 /* an uploaded logo replaces the two-letter mark */
 .logo.logo-img { background: transparent; overflow: hidden; }
 .logo.logo-img img { width: 100%; height: 100%; object-fit: contain; display: block; }
+/* the dashed border round copied cells (like Google Sheets) */
+.gc.cp:not(.pin) { position: relative; }
+.gc.cp::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 5; box-sizing: border-box; }
+.gc.cp-t::after { border-top: 2px dashed var(--brand); }
+.gc.cp-b::after { border-bottom: 2px dashed var(--brand); }
+.gc.cp-l::after { border-left: 2px dashed var(--brand); }
+.gc.cp-r::after { border-right: 2px dashed var(--brand); }

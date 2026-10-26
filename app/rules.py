@@ -1,4 +1,4 @@
-﻿"""Business rules: source status, title matching and pricing.
+"""Business rules: source status, title matching and pricing.
 
 Everything here is a pure function (no database, no network) so it can be unit tested.
 The source-status rules follow column W ("SOURCE STATUS") of the Listed Sheet, in the same order.
@@ -167,7 +167,7 @@ def compute_status(p, timeframe_days: float, title_threshold: float = 50) -> str
         return "OOS Different Item"
     if inv and variation_problem(p):
         return "OOS Variation"
-    if lead is not None and lead > timeframe_days:
+    if inv and lead is not None and lead > timeframe_days:         # a product with Inventory unchecked is already off sale: its delivery time is no issue
         return "TimeFrame"
     if inv and a == "Currently unavailable.":
         return "Out of Stock"

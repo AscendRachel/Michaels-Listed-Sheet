@@ -1,4 +1,4 @@
-﻿// Scraper: run progress, scraper PCs, import/export, settings, key and backup.
+// Scraper: run progress, scraper PCs, import/export, settings, key and backup.
 import { $, api, ago, confirmBox, download, esc, fmt, toast } from "./util.js";
 
 export async function mount(el, params, ctx) {
@@ -20,7 +20,7 @@ export async function mount(el, params, ctx) {
     const done = r ? r.done + r.failed : 0;
     const pctDone = r && r.total ? Math.round((done / r.total) * 100) : 0;
     const head = !r ? `<p class="muted">No run yet. Start the scraper on a scraper PC and it creates one.</p>` : `
-      <div class="btnrow" style="justify-content:space-between"><h3>Run #${r.id} · ${esc(r.state)}</h3>${admin && r.state === "open" ? `<button class="btn small danger" id="cancelRun">Cancel run</button>` : ""}</div>
+      <div class="btnrow" style="justify-content:space-between"><h3>${r.kind === "recheck" ? "Re-check run" : "Run"} #${r.id} · ${esc(r.state)}</h3>${admin && r.state === "open" ? `<button class="btn small danger" id="cancelRun">Cancel run</button>` : ""}</div>
       <div class="progress" style="margin:10px 0" role="progressbar" aria-valuenow="${pctDone}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pctDone}%"></i></div>
       <div class="stats"><div class="stat"><div class="v">${fmt(done)} / ${fmt(r.total)}</div><div class="l">checked (${pctDone}%)</div></div>
       <div class="stat"><div class="v">${fmt(r.pending)}</div><div class="l">waiting</div></div><div class="stat"><div class="v">${fmt(r.claimed)}</div><div class="l">in progress</div></div>

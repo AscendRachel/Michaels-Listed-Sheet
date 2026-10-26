@@ -1,4 +1,4 @@
-﻿"""Greentek Catalog - web app and API.
+"""Greentek Catalog - web app and API.
 
 Run with:  python run.py     (or: uvicorn app.main:app)
 """
@@ -246,9 +246,14 @@ def work_finish(list_id: int, u=Depends(current_user), b: dict = Depends(jbody))
     return work.finish(u, list_id, bool(b.get("force")))
 
 
+@app.get("/api/work/{list_id}/revert-preview")
+def work_revert_preview(list_id: int, u=Depends(current_user)):
+    return work.revert_preview(u, list_id)
+
+
 @app.post("/api/work/{list_id}/discard")
-def work_discard(list_id: int, u=Depends(current_user)):
-    return work.discard(u, list_id)
+def work_discard(list_id: int, u=Depends(current_user), b: dict = Depends(jbody)):
+    return work.discard(u, list_id, bool(b.get("revert")))
 
 
 @app.post("/api/locks")
@@ -538,6 +543,12 @@ def scraper_dashboard(u=Depends(current_user)):
 @app.post("/api/scraper/settings")
 def scraper_settings(request: Request, u=Depends(admin_user), b: dict = Depends(jbody)):
     return scraper.save_settings(b, u["name"])
+
+
+@app.post("/api/scraper/recheck")
+def scraper_recheck(u=Depends(current_user), b: dict = Depends(jbody)):
+    """Check these rows on Amazon again (from the sheet: the rows in the view, or the highlighted ones)."""
+    return scraper.recheck(b.get("skus") or [], u["name"])
 
 
 @app.post("/api/scraper/cancel")

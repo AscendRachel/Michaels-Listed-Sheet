@@ -17,7 +17,7 @@ from .db import AMAZON_BASE, conn, log_activity, now_str, tx
 from .rules import to_bool, to_float
 
 HEADER_KEYS = {
-    "ASIN": "asin", "SOURCE LINK": "link", "SKU": "sku", "PRODUCT NAME": "name", "CATEGORY": "category",
+    "ASIN": "asin", "SOURCE LINK": "link", "PRODUCT LINK": "link", "SKU": "sku", "PRODUCT NAME": "name", "CATEGORY": "category",
     "SOURCE PRICE": "source_price", "WEIGHT": "weight", "INVENTORY": "inventory", "LISTED": "listed",
     "LISTING STATUS": "listing_status", "PRICE": "price", "AVAILABILITY": "availability",
     "ESTIMATED DELIVERY": "delivery", "SOURCE": "source", "UPC": "upc", "VARIATION": "variation",

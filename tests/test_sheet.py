@@ -530,8 +530,43 @@ def test_work_list_survives_reloads_and_only_closes_on_confirm(loaded):
     assert forced["ok"] and forced["skipped"] == 1 and forced["forced"] is True
     w3 = loaded.post("/api/work", json={"name": "x", "params": params, "skus": ["SKU-1"]}).json()["id"]
     assert loaded.post(f"/api/work/{w3}/discard").json()["ok"] and loaded.get("/api/work").json()["items"] == []
-    # another person can't see or touch my list; an empty list isn't started
+    # another person can't see or touch my list; an empty list isn't started (see also the undo test below)
     mia = _member("wanda")
     w4 = loaded.post("/api/work", json={"name": "mine", "params": params, "skus": ["SKU-1"]}).json()["id"]
     assert mia.get(f"/api/work/{w4}").status_code == 400 and mia.get("/api/work").json()["items"] == []
     assert loaded.post("/api/work", json={"name": "empty", "params": params, "skus": []}).status_code == 400
+
+
+def test_discarding_a_work_list_can_undo_what_the_person_changed(loaded):
+    params = {"queue": "High Price"}
+    before = (row(loaded, "SKU-1")["source_price"], row(loaded, "SKU-1")["remarks"], row(loaded, "SKU-2")["remarks"])
+    wid = loaded.post("/api/work", json={"name": "undo me", "params": params, "skus": ["SKU-1", "SKU-2"]}).json()["id"]
+    cells(loaded, ("SKU-1", "source_price", "$12.50"), ("SKU-1", "remarks", "first"), ("SKU-2", "remarks", "second"))
+    cells(loaded, ("SKU-1", "remarks", "first again"))                       # two edits to one cell: back to the original, not the middle one
+    pv = loaded.get(f"/api/work/{wid}/revert-preview").json()
+    assert (pv["cells"], pv["products"], pv["conflicts"]) == (3, 2, 0)
+    # someone else edits SKU-2's remark afterwards: that cell must stay as they left it
+    mia = _member("mia")
+    assert mia.post("/api/sheet/cells", json={"edits": [{"sku": "SKU-2", "field": "remarks", "value": "mia's note"}]}).json()["changed"] == 1
+    pv = loaded.get(f"/api/work/{wid}/revert-preview").json()
+    assert (pv["cells"], pv["conflicts"]) == (2, 1)
+    res = loaded.post(f"/api/work/{wid}/discard", json={"revert": True}).json()
+    assert res["ok"] and res["undone"] == 2 and res["left_alone"] == 1
+    assert (row(loaded, "SKU-1")["source_price"], row(loaded, "SKU-1")["remarks"]) == (before[0], before[1])
+    assert row(loaded, "SKU-2")["remarks"] == "mia's note"
+    assert loaded.get("/api/work").json()["items"] == []
+    assert any(a["action"] == "discarded a work list" and "undid 2" in a["detail"] for a in loaded.get("/api/activity").json()["items"])
+
+
+def test_discard_without_undo_keeps_the_changes(loaded):
+    wid = loaded.post("/api/work", json={"name": "keep", "params": {}, "skus": ["SKU-1"]}).json()["id"]
+    cells(loaded, ("SKU-1", "remarks", "kept"))
+    assert loaded.post(f"/api/work/{wid}/discard", json={}).json()["undone"] == 0
+    assert row(loaded, "SKU-1")["remarks"] == "kept"
+
+
+def test_import_accepts_product_link_as_the_link_column():
+    from app import imports
+    idx = imports.map_headers([' ASIN', 'PRODUCT NAME', 'PRODUCT LINK', 'SKU'])
+    assert idx['link'] == 2 and idx['sku'] == 3
+    assert imports.map_headers(['SKU', 'SOURCE LINK', 'PRODUCT LINK'])['link'] == 1

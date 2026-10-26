@@ -275,6 +275,24 @@ async def read_variation(page):
         return None
 
 
+# The part of the page that holds the price, stock line and delivery date. On a slow connection the title shows up first
+# and this block a few seconds later, so a read taken too early finds it empty.
+BUYBOX_SELECTOR = ("#availability, #outOfStock, #outOfStockBuyBox_feature_div, #desktop_buybox, #buybox, #add-to-cart-button, "
+                   "#corePrice_feature_div, #apex_desktop, #mir-layout-DELIVERY_BLOCK")
+
+
+def read_looks_empty(out) -> str:
+    """"" when the read looks complete, otherwise why it is doubtful. Genuinely sold-out products look the same as an
+    early read (no price, "Currently unavailable."), so a doubtful read is read again instead of being trusted."""
+    price_missing = out["price"] == "Price not found"
+    avail = out["availability"]
+    if price_missing and avail in ("Currently unavailable.", "Availability not found"):
+        return "no price and no stock line"
+    if not price_missing and avail != "Currently unavailable." and out["delivery"] == "Delivery not found":
+        return "no delivery date"
+    return ""
+
+
 async def extract(page):
     title = await first_text(page, ["#productTitle"])
     price = await first_text(page, PRICE_SELECTORS)
@@ -576,6 +594,9 @@ class Engine:
                     result = "unavailable_page"
                     break
                 out = await extract(page)
+                doubt = read_looks_empty(out)
+                if doubt:
+                    out = await self.read_again(page, item, n, out, doubt, timeout)
                 result = "ok"
                 break
             except Exception as e:
@@ -599,6 +620,30 @@ class Engine:
         if out.get("image"):
             res["image"] = out["image"]
         return res
+
+    async def read_again(self, page, item, n, first, doubt, timeout):
+        """The first read looked empty (doubt says how). Wait for the page to finish loading and read again; if it is still empty,
+        reload the page once. A product that really is sold out reads the same every time and is reported as it is."""
+        out = first
+        for step in range(2):
+            try:
+                await page.wait_for_selector(BUYBOX_SELECTOR, timeout=10000)
+            except Exception:
+                pass
+            await page.wait_for_timeout(2500 if step == 0 else 4000)
+            out = await extract(page)
+            if not read_looks_empty(out):
+                self.log(f"Window {n}: {item['sku']} read again after the page finished loading ({doubt} the first time).")
+                return out
+            if step == 0 and not doubt.startswith("no delivery"):
+                try:
+                    await page.reload(wait_until="domcontentloaded", timeout=timeout)
+                    await continue_shopping_gate(page)
+                    if await is_captcha(page):
+                        return out                                   # leave the CAPTCHA to the next product; keep what was read
+                except Exception:
+                    return out
+        return out
 
     async def send_result(self, res):
         try:
