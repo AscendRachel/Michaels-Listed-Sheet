@@ -21,10 +21,16 @@ export const debounce = (fn, ms = 250) => {
   };
 };
 
+// The server writes its times without a time zone, in ITS OWN local time (a Philippine browser must not read them as its
+// own, or every "ago" is wrong by the difference between the two). The server says how far its clock is from UTC.
+let serverOffsetMin = null;
+export const setServerOffset = (min) => { serverOffsetMin = Number.isFinite(min) ? min : null; };
+
 export function ago(ts) {
   if (!ts) return "—";
-  const d = new Date(String(ts).replace(" ", "T"));
-  if (Number.isNaN(d)) return ts;
+  const iso = String(ts).replace(" ", "T");
+  const d = serverOffsetMin === null ? new Date(iso) : new Date(Date.parse(iso + "Z") - serverOffsetMin * 60000);
+  if (Number.isNaN(d.getTime())) return ts;
   const s = Math.max(0, (Date.now() - d) / 1000);
   if (s < 90) return "just now";
   if (s < 5400) return Math.round(s / 60) + " min ago";

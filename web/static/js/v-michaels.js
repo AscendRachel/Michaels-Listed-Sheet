@@ -7,7 +7,7 @@ export async function mount(el, params, ctx) {
   const hist = (await api("/api/michaels/history")).items;
   await ctx.refreshCounts();
   const c = ctx.counts.counts;
-  let preview = null, file = null, clear = true;
+  let preview = null, file = null, clear = true, job = null, watching = false;
 
   const draw = () => {
     el.innerHTML = `<div class="section-head"><div><h2>Michaels sync</h2><p>Replaces pasting the Download Listing into the Michaels_Data sheet. Products are matched by SKU, then their Michaels SKU number, price and quantity are updated.</p></div>
@@ -15,9 +15,11 @@ export async function mount(el, params, ctx) {
       <div class="qgrid" style="margin-bottom:16px">${["mz-missing", "mz-stock-off", "mz-zero-on", "mz-price"].map((k) => `<button class="qcard ${c[k] ? "warn" : "zero"}" data-queue="${k}"><span class="qn">${fmt(c[k] || 0)}</span><span class="ql">${esc(ctx.meta.queues[k].label)}</span></button>`).join("")}</div>
       ${admin ? `<div class="card"><h3>Upload a download</h3><p class="muted">CSV or Excel. Nothing changes until you review the preview and click Apply.</p>
         <input type="file" id="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm"></div>` : `<div class="banner">Only admins can import a Michaels download.</div>`}
+      <div id="job"></div>
       <div id="pv"></div>
       <div class="panel" style="margin-top:16px"><h3 style="margin-bottom:8px">Recent imports</h3>${hist.length ? `<div class="tablewrap"><table style="min-width:0"><thead><tr><th>When</th><th>By</th><th>File</th><th class="num">Updated</th><th class="num">Cleared</th></tr></thead><tbody>${hist.map((h) => `<tr><td>${esc(ago(h.at))}</td><td>${esc(h.user)}</td><td>${esc(h.filename)}</td><td class="num">${fmt(h.summary.updated)}</td><td class="num">${fmt(h.summary.cleared)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">No imports yet.</p>`}</div>`;
     if (preview) drawPreview();
+    if (job) showJob(job);
   };
 
   // The column pickers: one select per field, and a multi-select for the image columns.
@@ -50,13 +52,52 @@ export async function mount(el, params, ctx) {
       <div class="btnrow end"><button class="btn" id="cancel">Cancel</button><button class="btn primary" id="apply">Apply to ${fmt(p.matched)} products</button></div></div>`;
   };
 
+  // Reading and applying a big download takes a while, so both run on the server as a background job; this only shows
+  // how it is going (the same progress bar as the Listed Sheet import) and survives leaving the page.
+  const busy = (on) => { el.querySelectorAll("#file, #apply, #remap").forEach((x) => (x.disabled = on)); };
+  function showJob(j) {
+    const box = $("#job");
+    if (!box) return;
+    busy(j.state === "running");
+    if (j.state === "running") {
+      const pct = j.total ? Math.min(100, Math.round((j.done / j.total) * 100)) : 0;
+      box.innerHTML = `<div class="banner" style="margin-top:16px"><b>${j.kind === "apply" ? "Applying" : "Reading"} ${esc(j.filename || "")}…</b> ${esc(j.stage || "")}${j.total ? ` (${fmt(j.done)} of ${fmt(j.total)})` : j.done ? ` (${fmt(j.done)} rows so far)` : ""}
+        <div class="progress" style="margin:8px 0 2px" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
+        <div class="hint">Started by ${esc(j.user || "?")} ${esc(ago(j.started_at))}. You can leave this page; it keeps going.</div></div>`;
+    } else if (j.state === "error") {
+      box.innerHTML = `<div class="banner bad" style="margin-top:16px"><b>${j.kind === "apply" ? "The download was not applied." : "The file could not be read."}</b> ${esc(j.error || "")}<div class="hint">${esc(j.filename || "")}</div></div>`;
+    } else box.innerHTML = "";
+  }
+  async function watch() {
+    if (watching) return;
+    watching = true;
+    try {
+      for (let i = 0; i < 3600 && el.isConnected && $("#job"); i++) {                    // up to about an hour
+        let j;
+        try { j = await api("/api/michaels/job"); } catch { await new Promise((r) => setTimeout(r, 3000)); continue; }   // a dropped connection is not the end of the job
+        job = j;
+        showJob(j);
+        if (j.state !== "running") {
+          if (j.state === "done" && j.kind === "preview") { preview = j.result; drawPreview(); }
+          if (j.state === "done" && j.kind === "apply") {
+            toast(`Updated ${fmt(j.result.updated)} products.`);
+            preview = null; job = null;
+            await mount(el, params, ctx);
+          }
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    } finally { watching = false; }
+  }
   async function upload(mapping) {
     const buf = await file.arrayBuffer();
     const headers = { "X-Filename": encodeURIComponent(file.name) };
     if (mapping) headers["X-Mapping"] = encodeURIComponent(JSON.stringify(mapping));
     try {
-      preview = await api("/api/michaels/preview", buf, { headers });
-      drawPreview();
+      job = await api("/api/michaels/preview/start", buf, { headers });
+      showJob(job);
+      watch();
     } catch (e) { toast(e.message, "bad"); }
   }
 
@@ -78,12 +119,16 @@ export async function mount(el, params, ctx) {
     if (t.closest("#apply")) {
       if (!(await confirmBox("Apply this download?", `${fmt(preview.matched)} products get new Michaels price and quantity.${clear && preview.will_clear ? ` ${fmt(preview.will_clear)} products not in the file will have theirs cleared.` : ""}`, "Apply"))) return;
       try {
-        const r = await api("/api/michaels/apply", { token: preview.token, clear_missing: clear });
-        toast(`Updated ${fmt(r.updated)} products.`);
-        preview = null;
-        await mount(el, params, ctx);
+        job = await api("/api/michaels/apply/start", { token: preview.token, clear_missing: clear });
+        showJob(job);
+        watch();
       } catch (err) { toast(err.message, "bad"); }
     }
   };
   draw();
+  try {                                                         // a job that is still running (or a preview waiting for Apply) after leaving the page
+    const j = await api("/api/michaels/job");
+    if (j.state === "running") { job = j; showJob(j); watch(); }
+    else if (j.state === "done" && j.kind === "preview") { preview = j.result; drawPreview(); }
+  } catch { /* not an admin screen */ }
 }

@@ -55,6 +55,12 @@ def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def utc_offset_minutes() -> int:
+    """How far the server's clock (the one now_str() reads) is ahead of UTC right now. The screens need it because the
+    times are saved without a time zone."""
+    return int(datetime.now().astimezone().utcoffset().total_seconds() // 60)
+
+
 def conn() -> sqlite3.Connection:
     """One connection per thread (WAL lets readers run alongside the single writer)."""
     c = getattr(_local, "c", None)

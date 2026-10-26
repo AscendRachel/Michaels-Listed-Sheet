@@ -1,4 +1,4 @@
-﻿"""Importing the Listed Sheet and the Michaels "Download Listing" file."""
+"""Importing the Listed Sheet and the Michaels "Download Listing" file."""
 
 from __future__ import annotations
 
@@ -177,68 +177,87 @@ def import_products(filename: str, data: bytes, user: str, progress=None) -> dic
 # before the answer arrives, and the screen is left waiting although the import finished. As a job, the browser only
 # starts it and then asks how it is going; the result is kept on the server, so it can be read after a reload or a drop.
 JOB_KEY = "import_job"
-_JOB: dict = {}
-_JOB_LOCK = threading.Lock()
+class Job:
+    """One background job at a time, with a progress readout that is also saved in the settings (so a reload, or a dropped
+    connection, can read how it ended). A server restart marks a job that was running as cut off."""
+
+    def __init__(self, key: str, cut_off: str):
+        self.key, self.cut_off = key, cut_off
+        self.state: dict = {}
+        self.lock = threading.Lock()
+
+    def _save(self, job: dict) -> None:
+        with tx() as c:
+            db.set_setting(c, self.key, json.dumps(job))
+
+    def status(self) -> dict:
+        with self.lock:
+            if self.state:
+                return dict(self.state)
+        row = conn().execute("SELECT value FROM settings WHERE key=?", (self.key,)).fetchone()
+        try:
+            return json.loads(row["value"]) if row else {"state": "idle"}
+        except ValueError:
+            return {"state": "idle"}
+
+    def reset(self) -> None:
+        """At startup: a job saved as running was cut off by the restart."""
+        job = self.status()
+        if job.get("state") == "running":
+            self._save({**job, "state": "error", "finished_at": now_str(), "error": self.cut_off})
+        with self.lock:
+            self.state.clear()
+
+    def _run(self, work, ok_key: str) -> None:
+        def progress(stage, done, total):
+            with self.lock:
+                self.state.update({"stage": stage, "done": done, "total": total})
+        try:
+            end = {"state": "done", ok_key: work(progress)}
+        except ValueError as e:
+            end = {"state": "error", "error": str(e)}
+        except Exception as e:                                   # keep the server log's full traceback, and tell the screen what kind of problem it was
+            traceback.print_exc()
+            end = {"state": "error", "error": f"It stopped because of an unexpected problem ({type(e).__name__}: {e}). The server log has the details."}
+        with self.lock:
+            self.state.update({**end, "finished_at": now_str()})
+            final = dict(self.state)
+        self._save(final)
+
+    def start(self, first: dict, work, ok_key: str = "summary") -> dict:
+        """Start work(progress) in the background and return at once. Only one job can run at a time."""
+        with self.lock:
+            if self.state.get("state") == "running":
+                raise ValueError("Another import is already running. Wait for it to finish.")
+            self.state.clear()
+            self.state.update({"state": "running", "started_at": now_str(), "stage": "Reading the file", "done": 0, "total": 0, **first})
+            snapshot = dict(self.state)
+        self._save(snapshot)
+        threading.Thread(target=self._run, args=(work, ok_key), daemon=True, name=self.key).start()
+        return snapshot
 
 
-def _save_job(job: dict) -> None:
-    with tx() as c:
-        db.set_setting(c, JOB_KEY, json.dumps(job))
+# A 32,000-row import takes a while on a small server. Run through a normal request, a proxy or the browser can give up
+# before the answer arrives, and the screen is left waiting although the import finished. As a job, the browser only
+# starts it and then asks how it is going; the result is kept on the server, so it can be read after a reload or a drop.
+JOB_KEY = "import_job"
+_LIST = Job(JOB_KEY, "The server restarted while this import was running. Nothing was changed; import the file again.")
+_MICHAELS = Job("michaels_job", "The server restarted while this was running. Nothing was changed; upload the file again.")
 
 
 def job_status() -> dict:
-    with _JOB_LOCK:
-        if _JOB:
-            return dict(_JOB)
-    row = conn().execute("SELECT value FROM settings WHERE key=?", (JOB_KEY,)).fetchone()
-    try:
-        return json.loads(row["value"]) if row else {"state": "idle"}
-    except ValueError:
-        return {"state": "idle"}
+    return _LIST.status()
 
 
 def job_reset() -> None:
-    """At startup: a job saved as running was cut off by the restart."""
-    job = job_status()
-    if job.get("state") == "running":
-        _save_job({**job, "state": "error", "finished_at": now_str(), "error": "The server restarted while this import was running. Nothing was changed; import the file again."})
-    with _JOB_LOCK:
-        _JOB.clear()
-
-
-def _run_job(filename: str, data: bytes, user: str) -> None:
-    def progress(stage, done, total):
-        with _JOB_LOCK:
-            _JOB.update({"stage": stage, "done": done, "total": total})
-    try:
-        summary = import_products(filename, data, user, progress)
-        end = {"state": "done", "summary": summary}
-    except ValueError as e:
-        end = {"state": "error", "error": str(e)}
-    except Exception as e:                                       # keep the server log's full traceback, and tell the screen what kind of problem it was
-        traceback.print_exc()
-        end = {"state": "error", "error": f"The import stopped because of an unexpected problem ({type(e).__name__}: {e}). The server log has the details."}
-    with _JOB_LOCK:
-        _JOB.update({**end, "finished_at": now_str()})
-        final = dict(_JOB)
-    _save_job(final)
+    _LIST.reset()
+    _MICHAELS.reset()
 
 
 def start_job(filename: str, data: bytes, user: str) -> dict:
-    """Start importing in the background and return at once. Only one import can run at a time."""
     if not data:
         raise ValueError("The file is empty.")
-    with _JOB_LOCK:
-        if _JOB.get("state") == "running":
-            raise ValueError("An import is already running. Wait for it to finish.")
-        _JOB.clear()
-        _JOB.update({"state": "running", "filename": filename, "user": user, "started_at": now_str(),
-                     "stage": "Reading the file", "done": 0, "total": 0})
-        first = dict(_JOB)
-    _save_job(first)
-    threading.Thread(target=_run_job, args=(filename, data, user), daemon=True, name="import").start()
-    return first
-
+    return _LIST.start({"filename": filename, "user": user}, lambda progress: import_products(filename, data, user, progress))
 
 # ------------------------------------------------------------------ Michaels "Download Listing"
 MZ_FIELDS = {
@@ -298,15 +317,20 @@ def mz_detect(header: list[str]) -> dict[str, int]:
     return found
 
 
-def mz_read(filename: str, data: bytes):
+def mz_read(filename: str, data: bytes, note=None):
+    note = note or (lambda *a: None)
+    note("Reading the file", 0, 0)
     if filename.lower().endswith((".xlsx", ".xlsm")):
         try:
             import openpyxl
         except ImportError:
             raise ValueError("Reading .xlsx needs openpyxl. Run setup again, or upload the CSV version.")
         wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-        rows = [["" if v is None else (str(int(v)) if isinstance(v, float) and v.is_integer() and abs(v) < 1e15 else str(v))
-                 for v in r] for r in wb.worksheets[0].iter_rows(values_only=True)]
+        rows = []
+        for n, r in enumerate(wb.worksheets[0].iter_rows(values_only=True), start=1):
+            rows.append(["" if v is None else (str(int(v)) if isinstance(v, float) and v.is_integer() and abs(v) < 1e15 else str(v)) for v in r])
+            if n % 2000 == 0:
+                note("Reading the file", n, 0)
         wb.close()
     else:
         text = data.decode("utf-8-sig", errors="replace")
@@ -319,8 +343,9 @@ def mz_read(filename: str, data: bytes):
     return rows[hi], rows[hi + 1:]
 
 
-def mz_preview(filename: str, data: bytes, mapping: dict | None = None) -> dict:
-    header, rows = mz_read(filename, data)
+def mz_preview(filename: str, data: bytes, mapping: dict | None = None, progress=None) -> dict:
+    note = progress or (lambda *a: None)
+    header, rows = mz_read(filename, data, note)
     cols = mz_detect(header)
     if mapping:
         cols = {k: int(v) for k, v in mapping.items() if k != "images" and str(v).lstrip("-").isdigit() and int(v) >= 0}
@@ -341,7 +366,9 @@ def mz_preview(filename: str, data: bytes, mapping: dict | None = None) -> dict:
         return str(r[i]).strip() if i is not None and i < len(r) else ""
 
     parsed, dup, blank, rounded, rounded_skus = {}, 0, 0, 0, []
-    for r in rows:
+    for n, r in enumerate(rows, start=1):
+        if n % 2000 == 0:
+            note("Reading the rows", n, len(rows))
         sku = g(r, "sku")
         if not sku:
             blank += 1
@@ -358,11 +385,14 @@ def mz_preview(filename: str, data: bytes, mapping: dict | None = None) -> dict:
         qty = to_float(g(r, "qty"))
         parsed[key] = {"sku": sku, "sku_number": num, "price": to_float(g(r, "price")),
                        "qty": int(qty) if qty is not None else None, "images": parse_images(r, img_cols)}
+    note("Comparing with the catalog", 0, len(parsed))
     prods = {r["sku"].lower(): r for r in conn().execute(
         "SELECT sku, name, listed, michaels_sku_number, michaels_price, michaels_qty FROM products WHERE active=1")}
     matched = [k for k in parsed if k in prods]
     changes, price_changes, qty_changes, new_links = [], 0, 0, 0
-    for k in matched:
+    for n, k in enumerate(matched, start=1):
+        if n % 2000 == 0:
+            note("Comparing with the catalog", n, len(matched))
         p, m = prods[k], parsed[k]
         pc = m["price"] is not None and (p["michaels_price"] is None or abs((p["michaels_price"] or 0) - m["price"]) > 0.001)
         qc = m["qty"] is not None and (p["michaels_qty"] is None or int(p["michaels_qty"]) != m["qty"])
@@ -398,18 +428,27 @@ def mz_preview(filename: str, data: bytes, mapping: dict | None = None) -> dict:
             "has_sku_number": "sku_number" in cols, "changes": changes}
 
 
-def mz_apply(token: str, clear_missing: bool, user: str) -> dict:
+def _mz_pending(token: str) -> dict:
     pending = MZ_PENDING.get(token or "")
     if not pending or time.time() - pending["at"] > 3600:
         raise ValueError("This preview has expired. Upload the file again.")
     if not pending["matched"]:
         raise ValueError("None of the rows in this file match a product SKU, so nothing was changed. "
                          "Check that you picked the right file and the right SKU column.")
+    return pending
+
+
+def mz_apply(token: str, clear_missing: bool, user: str, progress=None) -> dict:
+    note = progress or (lambda *a: None)
+    pending = _mz_pending(token)
     rows, now = pending["rows"], now_str()
     has_images = pending.get("has_images", False)
     updated = cleared = with_images = 0
     with tx() as c:
-        for p in c.execute("SELECT sku FROM products WHERE active=1").fetchall():
+        products = c.execute("SELECT sku FROM products WHERE active=1").fetchall()
+        for n, p in enumerate(products, start=1):
+            if n % 400 == 0:
+                note("Saving the products", n, len(products))
             m = rows.get(p["sku"].lower())
             if m:
                 c.execute("""UPDATE products SET michaels_sku_number=COALESCE(NULLIF(?,''), michaels_sku_number),
@@ -435,6 +474,28 @@ def mz_apply(token: str, clear_missing: bool, user: str) -> dict:
                      (f", {cleared:,} not in the file were cleared" if cleared else ""))
     MZ_PENDING.clear()
     return {"ok": True, **summary}
+
+
+def mz_preview_job(filename: str, data: bytes, mapping: dict | None, user: str) -> dict:
+    """The preview in the background: reading a big download can take a while. The result is the dict mz_preview returns."""
+    if not data:
+        raise ValueError("The file is empty.")
+    return _MICHAELS.start({"kind": "preview", "filename": filename, "user": user},
+                           lambda progress: mz_preview(filename, data, mapping, progress), "result")
+
+
+def mz_apply_job(token: str, clear_missing: bool, user: str) -> dict:
+    pending = _mz_pending(token)                                  # an expired or empty preview is refused now, not inside the job
+    return _MICHAELS.start({"kind": "apply", "filename": pending["filename"], "user": user, "stage": "Saving the products"},
+                           lambda progress: mz_apply(token, clear_missing, user, progress), "result")
+
+
+def mz_job_status() -> dict:
+    job = _MICHAELS.status()
+    tok = (job.get("result") or {}).get("token") if job.get("kind") == "preview" else None
+    if tok and tok not in MZ_PENDING:                             # a preview whose upload is gone (a restart, or a newer preview) cannot be applied
+        job = {**{k: v for k, v in job.items() if k != "result"}, "state": "idle"}
+    return job
 
 
 def mz_history() -> dict:

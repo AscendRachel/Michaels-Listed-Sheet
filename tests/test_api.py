@@ -315,7 +315,7 @@ def test_the_import_runs_in_the_background_and_its_result_is_kept(admin, monkeyp
     assert j["state"] == "done" and j["summary"]["products"] == 4 and j["filename"] == "s.csv" and j["finished_at"]
     assert admin.get("/api/products", params={"q": "SKU-1"}).json()["items"][0]["sku"] == "SKU-1"
     # the result survives (it is kept on the server): a new "page load" still sees it
-    imports._JOB.clear()
+    imports._LIST.state.clear()
     assert admin.get("/api/import/status").json()["state"] == "done"
     # a file that can't be read is reported as an error, not left hanging
     start(b"a,b\n1,2\n", "bad.csv")
@@ -338,8 +338,8 @@ def test_the_import_runs_in_the_background_and_its_result_is_kept(admin, monkeyp
             break
         time.sleep(0.1)
     # a restart while an import was running marks it as cut off
-    imports._save_job({"state": "running", "filename": "x.csv", "started_at": "2026-01-01 00:00:00"})
-    imports._JOB.clear()
+    imports._LIST._save({"state": "running", "filename": "x.csv", "started_at": "2026-01-01 00:00:00"})
+    imports._LIST.state.clear()
     imports.job_reset()
     assert admin.get("/api/import/status").json()["state"] == "error" and "restarted" in admin.get("/api/import/status").json()["error"]
     member = TestClient(app)

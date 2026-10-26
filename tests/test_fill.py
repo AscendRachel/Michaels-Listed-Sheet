@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -53,3 +54,9 @@ def test_rows_typed_into_the_sheet_need_nothing(loaded):
     cells_ = loaded.post("/api/sheet/cells", json={"edits": [{"sku": "NEW-000001", "field": "sku", "value": "REAL-7"}]}).json()
     assert cells_["renamed"] == {"NEW-000001": "REAL-7"}
     assert loaded.post("/api/products/create-batch", json={"rows": [{"remarks": "x"}]}).json()["created"] == 0
+
+@pytest.mark.skipif(not shutil.which("node"), reason="node is not installed")
+@pytest.mark.parametrize("tz", ["Asia/Manila", "America/New_York", "UTC"])
+def test_times_from_the_server_read_correctly_in_any_browser_time_zone(tz):
+    r = subprocess.run(["node", str(HERE / "ago_offset.mjs")], capture_output=True, text=True, env={**os.environ, "TZ": tz})
+    assert r.returncode == 0, r.stdout + r.stderr

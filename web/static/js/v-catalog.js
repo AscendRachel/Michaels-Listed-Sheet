@@ -554,6 +554,13 @@ const move = (dr, dc, extend) => {
   if (extend) setSel(s.r1, s.c1, s.r2 + dr, s.c2 + dc);
   else setSel(s.r2 + dr, s.c2 + dc);
 };
+async function openLink(r) {
+  if (!rowAt(r)) await ensureRows(r, r);
+  let url = String(rowAt(r)?.link || "").trim();
+  if (url && !/^[a-z][a-z0-9+.-]*:/i.test(url) && /^[\w-]+(\.[\w-]+)+(\/|$)/.test(url)) url = "https://" + url;       // "www.amazon.com/dp/…" without the https://
+  if (!/^https?:\/\//i.test(url)) return toast(url ? "That isn't a web address, so it can't be opened. Press Enter to fix it." : "There's no link in this cell yet. Press Enter to type one.", "bad");
+  window.open(url, "_blank", "noopener");
+}
 function cellFromEvent(e) {
   const t = e.target.closest(".gc");
   return t ? { r: +t.dataset.r, c: +t.dataset.c } : null;
@@ -1407,6 +1414,12 @@ function wire() {
       openImages(cell.r);
       return;
     }
+    if (e.detail === 2 && !e.shiftKey && !e.ctrlKey && !e.metaKey && cols[cell.c]?.k === "link") {          // SOURCE LINK: double-click opens the page
+      e.preventDefault();                                          // (read on the second mouse-down: selecting redraws the cells, which can swallow the browser's own double-click event)
+      setSel(cell.r, cell.c, cell.r, cell.c, false);
+      openLink(cell.r);
+      return;
+    }
     const add = (e.ctrlKey || e.metaKey) && !e.shiftKey && !!S.sel;       // Ctrl+click: add another block, keep the ones already picked
     const keep = add ? rects() : null;
     S.add = add;
@@ -1440,7 +1453,7 @@ function wire() {
     const cell = cellFromEvent(e);
     if (!cell) return;
     if (cell.c === -1) { const row = rowAt(cell.r); if (row && !row._draft) openDrawer(row.sku, ctx, onRowChanged); }
-    else startEdit(cell.r, cell.c);
+    else if (visCols()[cell.c]?.k !== "link") startEdit(cell.r, cell.c);       // SOURCE LINK opens its page on the second mouse-down instead (see openLink)
   });
 
   el.head.addEventListener("click", (e) => {

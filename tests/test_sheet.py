@@ -1,4 +1,4 @@
-﻿import math
+import math
 
 
 def test_import_reads_sku_number_from_the_sheet(loaded):
@@ -570,3 +570,40 @@ def test_import_accepts_product_link_as_the_link_column():
     idx = imports.map_headers([' ASIN', 'PRODUCT NAME', 'PRODUCT LINK', 'SKU'])
     assert idx['link'] == 2 and idx['sku'] == 3
     assert imports.map_headers(['SKU', 'SOURCE LINK', 'PRODUCT LINK'])['link'] == 1
+
+
+def _wait_michaels_job(c):
+    import time
+    for _ in range(100):
+        j = c.get("/api/michaels/job").json()
+        if j["state"] != "running":
+            return j
+        time.sleep(0.05)
+    raise AssertionError("the Michaels job did not finish")
+
+
+def test_the_michaels_import_runs_in_the_background_with_progress(loaded):
+    data = b"SKU,Price,Qty,SKU Number\nSKU-1,31,8,777\nSKU-2,9,3,888\nNOPE,1,1,1\n"
+    started = loaded.post("/api/michaels/preview/start", content=data, headers={"X-Filename": "m.csv"}).json()
+    assert started["state"] == "running" and started["kind"] == "preview" and started["filename"] == "m.csv"
+    job = _wait_michaels_job(loaded)
+    assert job["state"] == "done" and job["kind"] == "preview"
+    pv = job["result"]
+    assert pv["ok"] and pv["rows"] == 3 and pv["matched"] == 2 and pv["token"]
+    # nothing is applied by a preview; Apply is its own job and refuses an unknown or old preview up front
+    assert row(loaded, "SKU-1")["michaels_sku_number"] != "777"
+    assert loaded.post("/api/michaels/apply/start", json={"token": "nope"}).status_code == 400
+    assert loaded.post("/api/michaels/apply/start", json={"token": pv["token"], "clear_missing": False}).json()["kind"] == "apply"
+    done = _wait_michaels_job(loaded)
+    assert done["state"] == "done" and done["kind"] == "apply" and done["result"]["updated"] >= 2
+    assert row(loaded, "SKU-1")["michaels_sku_number"] == "777" and row(loaded, "SKU-2")["michaels_sku_number"] == "888"
+    # a preview that was already applied can't be applied again, and a finished preview is not offered twice
+    assert loaded.post("/api/michaels/apply/start", json={"token": pv["token"]}).status_code == 400
+    # a file that can't be read ends as a plain error on the job, not a hung screen
+    loaded.post("/api/michaels/preview/start", content=b"", headers={"X-Filename": "e.csv"})
+    bad = loaded.post("/api/michaels/preview/start", content=b"x", headers={"X-Filename": "e.xlsx"}).json()
+    assert bad["state"] == "running"
+    assert _wait_michaels_job(loaded)["state"] == "error"
+    # only admins can start one
+    mia = _member("jobmember")
+    assert mia.post("/api/michaels/preview/start", content=data, headers={"X-Filename": "m.csv"}).status_code == 403

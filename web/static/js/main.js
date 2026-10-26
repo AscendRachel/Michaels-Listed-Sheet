@@ -1,5 +1,5 @@
 // App shell: navigation, shared state and the view router.
-import { $, api, dialog, esc, fmt, store, toast } from "./util.js";
+import { $, api, dialog, esc, fmt, setServerOffset, store, toast } from "./util.js";
 
 export const ctx = {
   meta: null,
@@ -11,6 +11,7 @@ export const ctx = {
   },
   async refreshMeta() {
     ctx.meta = await api("/api/meta");
+    setServerOffset(ctx.meta.utc_offset_minutes);
   },
 };
 

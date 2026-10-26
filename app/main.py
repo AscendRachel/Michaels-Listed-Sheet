@@ -141,7 +141,7 @@ app.mount("/static", StaticFiles(directory=WEB / "static"), name="static")
 # ------------------------------------------------------------------ session
 @app.get("/api/ping")
 def ping():
-    return {"ok": True, "server_time": now_str()}
+    return {"ok": True, "server_time": now_str(), "utc_offset_minutes": db.utc_offset_minutes()}
 
 
 @app.get("/api/setup-needed")
@@ -206,7 +206,7 @@ def change_password(request: Request, u=Depends(current_user), b: dict = Depends
 # ------------------------------------------------------------------ catalog
 @app.get("/api/meta")
 def meta(u=Depends(current_user)):
-    return {**catalog.meta(), "me": u, "locks": protect.all_locks(), "brand": brand.get()}
+    return {**catalog.meta(), "me": u, "locks": protect.all_locks(), "brand": brand.get(), "utc_offset_minutes": db.utc_offset_minutes()}
 
 
 @app.post("/api/brand")
@@ -495,6 +495,29 @@ def michaels_preview(request: Request, u=Depends(admin_user), raw: bytes = Depen
 @app.post("/api/michaels/apply")
 def michaels_apply(request: Request, u=Depends(admin_user), b: dict = Depends(jbody)):
     return imports.mz_apply(b.get("token"), bool(b.get("clear_missing", True)), u["name"])
+
+
+def _mapping(request: Request):
+    if not request.headers.get("x-mapping"):
+        return None
+    import json
+    return json.loads(unquote(request.headers["x-mapping"]))
+
+
+@app.post("/api/michaels/preview/start")
+def michaels_preview_start(request: Request, u=Depends(admin_user), raw: bytes = Depends(rawbody)):
+    """The same preview, run in the background (the screen follows /api/michaels/job)."""
+    return imports.mz_preview_job(unquote(request.headers.get("x-filename") or "upload.csv"), raw, _mapping(request), u["name"])
+
+
+@app.post("/api/michaels/apply/start")
+def michaels_apply_start(u=Depends(admin_user), b: dict = Depends(jbody)):
+    return imports.mz_apply_job(b.get("token"), bool(b.get("clear_missing", True)), u["name"])
+
+
+@app.get("/api/michaels/job")
+def michaels_job(u=Depends(current_user)):
+    return imports.mz_job_status()
 
 
 @app.get("/api/sold")
