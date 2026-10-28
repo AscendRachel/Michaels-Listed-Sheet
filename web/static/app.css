@@ -192,7 +192,7 @@ main:has(.sheetpage) { max-width: none; padding-top: 14px; padding-bottom: 20px;
 .hc.fc input, .hc.fc select { width: 100%; padding: 3px 6px; font-size: 12px; border-radius: 5px; background: var(--panel); }
 .gbody { position: relative; }
 .gr { position: absolute; left: 0; display: flex; height: 30px; }
-.gc { flex: none; box-sizing: border-box; height: 30px; padding: 0 8px; line-height: 29px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--panel); user-select: none; cursor: cell; }
+.gc { flex: none; box-sizing: border-box; height: 30px; padding: 0 8px; line-height: 29px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--panel); user-select: none; }
 .gc.r { text-align: right; font-variant-numeric: tabular-nums; }
 .gc.ctr { text-align: center; }
 .gc.ro { color: var(--muted); }

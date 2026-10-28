@@ -35,7 +35,7 @@ def clean():
     """Empty every table between tests."""
     c = db.conn()
     for t in ("products", "history", "runs", "tasks", "agents", "imports", "michaels_imports", "activity",
-              "saved_views", "sessions", "users", "settings", "column_locks", "worklists", "brand_logo"):
+              "saved_views", "sessions", "users", "settings", "column_locks", "worklists", "brand_logo", "custom_columns"):
         c.execute(f"DELETE FROM {t}")
     auth.FAILED.clear()
     from app import protect

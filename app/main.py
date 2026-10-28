@@ -262,6 +262,17 @@ def set_lock(u=Depends(admin_user), b: dict = Depends(jbody)):
     return {"locks": protect.set_lock(b.get("col"), b.get("mode"), b.get("users") or [], b.get("note"), u["name"])}
 
 
+@app.post("/api/dropdowns")
+def set_dropdown(u=Depends(admin_user), b: dict = Depends(jbody)):
+    """Turn a text column into a fixed dropdown with these values, or back into free typing: admins only."""
+    return catalog.set_dropdown(b.get("col"), b.get("values"), bool(b.get("enabled")), u["name"])
+
+
+@app.get("/api/dropdowns/values")
+def dropdown_values(col: str, u=Depends(current_user)):
+    return catalog.distinct_values(col)
+
+
 @app.get("/api/queues")
 def queues(u=Depends(current_user)):
     return catalog.queue_counts()

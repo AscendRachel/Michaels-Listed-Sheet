@@ -330,11 +330,99 @@ def categories() -> list[str]:
         "SELECT DISTINCT category FROM products WHERE active=1 AND COALESCE(category,'')<>'' ORDER BY category")]
 
 
+# ------------------------------------------------------------------ fixed dropdown columns
+# An admin can turn a text column into a dropdown: people then pick one of the listed values instead of typing.
+# Stored as one setting, {column key: [values]}. Imports and the scraper are not checked against it.
+NO_DROPDOWN = {"name", "link", "title", "title_ok"}
+
+
+def get_dropdowns(c=None) -> dict[str, list[str]]:
+    c = c or conn()
+    row = c.execute("SELECT value FROM settings WHERE key='dropdowns'").fetchone()
+    try:
+        raw = json.loads(row["value"]) if row else {}
+    except ValueError:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {k: [str(x) for x in v] for k, v in raw.items() if isinstance(v, list)}
+
+
+def _dropdown_label(c, col: str) -> str:
+    """The column's label when it can be a dropdown (a stored text column or a custom text column), else ValueError."""
+    if col in EDITABLE and EDITABLE[col] is str and col not in NO_DROPDOWN:
+        return FIELD_LABELS.get(col, col)
+    custom = c.execute("SELECT label, type FROM custom_columns WHERE key=?", (col,)).fetchone()
+    if custom and custom["type"] == "text":
+        return custom["label"]
+    raise ValueError("This column can't be a dropdown. Only text columns can (not names, links or calculated columns).")
+
+
+def _clean_values(values) -> list[str]:
+    out, seen = [], set()
+    for v in values or []:
+        s = re.sub(r"\s+", " ", str(v).strip())[:80]
+        if s and s.lower() not in seen:
+            seen.add(s.lower())
+            out.append(s)
+    return out[:300]
+
+
+def set_dropdown(col: str, values, enabled: bool, user: str) -> dict:
+    values = _clean_values(values)
+    with tx() as c:
+        label = _dropdown_label(c, col)
+        now = get_dropdowns(c)
+        if enabled:
+            if not values:
+                raise ValueError("Add at least one value, or turn the dropdown off.")
+            now[col] = values
+        else:
+            now.pop(col, None)
+        db.set_setting(c, "dropdowns", json.dumps(now))
+        shown = ", ".join(values[:8]) + ("…" if len(values) > 8 else "")
+        log_activity(c, user, "changed a dropdown", "", f"{label}: " + (f"{len(values)} values ({shown})" if enabled else "back to free typing"))
+    return {"dropdowns": get_dropdowns()}
+
+
+def dropdown_value(c, field: str, v: str, current, label: str | None = None) -> str:
+    """v is a value being typed into `field`. When the column is a dropdown, return the listed spelling of it or
+    raise ValueError. A cell that already holds exactly v is left alone, so old values outside the list survive."""
+    allowed = get_dropdowns(c).get(field)
+    if allowed is None or not v or v == (current or ""):
+        return v
+    hit = next((x for x in allowed if x.lower() == v.lower()), None)
+    if hit is None:
+        raise ValueError(f"“{v}” isn't in the dropdown for {label or FIELD_LABELS.get(field, field)}. Choose one of: "
+                         + ", ".join(allowed[:12]) + ("…" if len(allowed) > 12 else "") + ".")
+    return hit
+
+
+def distinct_values(col: str) -> dict:
+    """The values a column holds now (numbers in order), to start a dropdown from."""
+    c = conn()
+    _dropdown_label(c, col)
+    if col in EDITABLE:
+        rows = c.execute(f"SELECT DISTINCT {col} AS v FROM products WHERE active=1 AND COALESCE({col}, '')<>''")
+    else:
+        rows = c.execute("SELECT DISTINCT json_extract(extra, '$.' || ?) AS v FROM products WHERE active=1 "
+                         "AND extra IS NOT NULL AND COALESCE(json_extract(extra, '$.' || ?), '')<>''", (col, col))
+    vals = _clean_values(str(r["v"]) for r in rows)
+
+    def order(s):
+        n = to_float(s)
+        return (0, n, s.lower()) if n is not None else (1, 0, s.lower())
+    vals.sort(key=order)
+    return {"values": vals, "more": len(vals) >= 300}
+
+
 def meta() -> dict:
     c = conn()
+    dropdowns = get_dropdowns(c)
     return {"categories": categories(), "pricing": db.get_pricing(c), "settings": db.get_settings(c),
             "custom_columns": [dict(r) for r in c.execute("SELECT key, label, type, after FROM custom_columns ORDER BY created_at, rowid")],
-            "listing_statuses": LISTING_STATUSES, "manual_statuses": MANUAL_STATUSES,
+            "dropdowns": dropdowns,
+            "listing_statuses": LISTING_STATUSES, "manual_statuses": dropdowns.get("manual_status") or MANUAL_STATUSES,
             "queues": {k: {"label": v[0], "group": v[1]} for k, v in EXTRA_QUEUES.items()},
             "table_labels": rules.TABLE_LABELS}
 
@@ -406,6 +494,8 @@ def _apply_patch(c, p, patch: dict, raw: list | None = None) -> tuple[list[str],
             raise ValueError("Listing status must be Live, Deactivated or OOS.")
         if k == "name" and not v:
             raise ValueError("Product name can't be empty.")
+        if EDITABLE[k] is str and k not in NO_DROPDOWN:
+            v = dropdown_value(c, k, v, p[k])
         old = p[k]
         if (old if old is not None else "") == (v if v is not None else ""):
             continue

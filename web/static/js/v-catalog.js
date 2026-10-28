@@ -77,6 +77,7 @@ const SORTABLE = new Set(["sku", "asin", "name", "status", "source_price", "fee"
   "michaels_qty", "michaels_sku_number", "weight", "sold_total", "sold_2025", "sold_2026", "run_at", "category", "listing_status",
   "manual_status", "listed", "inventory", "remarks", "variation", "upc", "source", "title", "title_check", "checked_by", "amazon_variation"]);
 const NO_FILTER = new Set(["title_check", "markup_pct", "sold_2025", "sold_2026"]);
+const NO_DROPDOWN = new Set(["sku", "name", "link", "title", "title_check"]);       // identity and read-only text columns can't be dropdowns
 const PRESETS = {
   "All columns": null,
   "Daily work": ["img", "amz_img", "sku", "price", "availability", "delivery", "listed", "inventory", "category", "name", "variation", "amazon_variation", "listing_status", "weight", "source_price", "auto_price", "status", "run_at", "checked_by", "manual_status", "remarks", "michaels_sku_number", "michaels_price", "michaels_qty"],
@@ -604,8 +605,15 @@ function applyDraftEdits(edits) {
   const yes = /^(true|1|yes|y|x|checked|on)$/i, money = (s) => Number(String(s).replace(/[$,\s]/g, ""));
   let changed = 0, rejected = 0, why = "";
   for (const e of edits) {
-    const d = S.draftMap.get(e.sku), f = e.field, raw = e.value == null ? "" : String(e.value).trim();
+    const d = S.draftMap.get(e.sku), f = e.field;
+    let raw = e.value == null ? "" : String(e.value).trim();
     if (!d) continue;
+    const dd = f !== "sku" && ctx.meta.dropdowns?.[f];
+    if (dd && raw) {                                          // a dropdown column takes only its listed values
+      const m = dd.find((s) => s.toLowerCase() === raw.toLowerCase());
+      if (!m) { rejected++; why = `“${raw}” isn't in the dropdown. Choose one of: ${dd.slice(0, 12).join(", ")}${dd.length > 12 ? "…" : ""}.`; continue; }
+      raw = m;
+    }
     if (f === "sku") d._sku = raw;
     else if (DRAFT_BOOL.has(f)) d[f] = raw === "" ? null : yes.test(raw);
     else if (DRAFT_NUM.has(f)) {
@@ -1048,6 +1056,7 @@ function openImages(r) {
 }
 
 // ------------------------------------------------------------------ editing
+const dropdownOf = (col) => ctx.meta.dropdowns?.[col.k];              // the allowed values when an admin made the column a dropdown
 function startEdit(r, c, replaceWith) {
   const col = visCols()[c], row = rowAt(r);
   if (!row || !col) return;
@@ -1056,12 +1065,22 @@ function startEdit(r, c, replaceWith) {
   if (row._draft && !draftEditable(col)) return toast("This column fills in after the product is saved.");
   if (col.t === "bool") return doEdits([{ sku: row.sku, field: col.k, value: row[col.k] ? "FALSE" : "TRUE" }]);
   closeEditor(false);
-  const inp = document.createElement("input");
+  const dd = dropdownOf(col);
+  const inp = document.createElement(dd ? "select" : "input");
   inp.className = "editor";
-  inp.value = replaceWith !== undefined ? replaceWith : rawValue(row, col);
-  if (col.t === "status") inp.setAttribute("list", "dl_statuses");
-  else if (col.list) inp.setAttribute("list", "dl_" + col.list);
-  else if (col.k === "source") inp.setAttribute("list", "dl_source");
+  if (dd) {                                                          // a fixed dropdown: pick a value, no typing
+    const cur = String(rawValue(row, col) ?? "");
+    const vals = ["", ...dd, ...(cur && !dd.some((x) => x.toLowerCase() === cur.toLowerCase()) ? [cur] : [])];
+    inp.innerHTML = vals.map((v) => `<option value="${esc(v)}">${esc(v || "(empty)")}</option>`).join("");
+    const typed = replaceWith !== undefined ? vals.find((v) => v && v.toLowerCase().startsWith(replaceWith.toLowerCase())) : undefined;
+    inp.value = typed ?? vals.find((v) => v.toLowerCase() === cur.toLowerCase()) ?? "";
+    inp.addEventListener("change", () => { closeEditor(true); el.scroller.focus(); });
+  } else {
+    inp.value = replaceWith !== undefined ? replaceWith : rawValue(row, col);
+    if (col.t === "status") inp.setAttribute("list", "dl_statuses");
+    else if (col.list) inp.setAttribute("list", "dl_" + col.list);
+    else if (col.k === "source") inp.setAttribute("list", "dl_source");
+  }
   if (col.pin) inp.classList.add("pinned");                          // a frozen column's editor stays put while the sheet is scrolled
   inp.style.cssText = `left:${col.pin ? el.scroller.scrollLeft + pinLeft(c) : colX()[c]}px;top:${HEADERS_H + r * RH}px;width:${Math.max(colW(col), 120)}px;height:${RH}px`;
   S.edit = { r, c, sku: row.sku, field: col.k, original: rawValue(row, col), input: inp, done: false };
@@ -1074,7 +1093,8 @@ function startEdit(r, c, replaceWith) {
   inp.addEventListener("blur", () => closeEditor(true));
   el.inner.append(inp);
   inp.focus();
-  if (replaceWith === undefined) inp.select(); else inp.setSelectionRange(inp.value.length, inp.value.length);
+  if (dd) { try { inp.showPicker(); } catch {} }                    // open the list at once
+  else if (replaceWith === undefined) inp.select(); else inp.setSelectionRange(inp.value.length, inp.value.length);
 }
 function closeEditor(commit) {
   const ed = S.edit;
@@ -1349,7 +1369,11 @@ async function runAction(act) {
     field = act.split(":")[1];
     const names = { listing_status: "LISTING STATUS", manual_status: "STATUS COUNTER", category: "CATEGORY", remarks: "OPTIMIZER REMARKS" };
     const list = field === "listing_status" ? ctx.meta.listing_statuses : field === "manual_status" ? ctx.meta.manual_statuses : field === "category" ? ctx.meta.categories : [];
-    const r = await dialog({ title: `Set ${names[field]} for ${sc.label}`, body: `<input name="v" list="dlg_list" autofocus placeholder="Type or pick a value"><datalist id="dlg_list">${list.map((x) => `<option value="${esc(x)}">`).join("")}</datalist>`, actions: [["Cancel", "close"], ["Continue", "ok", "primary"]] });
+    const fixed = ctx.meta.dropdowns?.[field];                           // a fixed dropdown: only its values can be chosen
+    const input = fixed
+      ? `<select name="v" autofocus><option value=""></option>${fixed.map((x) => `<option>${esc(x)}</option>`).join("")}</select>`
+      : `<input name="v" list="dlg_list" autofocus placeholder="Type or pick a value"><datalist id="dlg_list">${list.map((x) => `<option value="${esc(x)}">`).join("")}</datalist>`;
+    const r = await dialog({ title: `Set ${names[field]} for ${sc.label}`, body: input, actions: [["Cancel", "close"], ["Continue", "ok", "primary"]] });
     if (r.value !== "ok") return;
     value = new FormData(r.el.querySelector("form")).get("v");
     label = `${names[field]} → ${value || "(blank)"}`;
@@ -1606,6 +1630,7 @@ function openHeaderMenu(ci, x, y) {
     <button data-hma="asc">Sort A → Z</button><button data-hma="desc">Sort Z → A</button><button data-hma="nosort">Clear sort</button><hr>
     ${c.t === "img" || c.t === "amzimg" ? "" : `<button data-hma="protect" ${admin ? "" : "disabled"}>🔒 ${lockOf(c.k) ? "Change protection…" : "Protect this column…"}${admin ? "" : " (admins only)"}</button>
       ${lockOf(c.k) && !admin ? `<div class="mhead">${esc(lockTip(c.k))}</div>` : ""}<hr>`}
+    ${c.t === "text" && !c.calc && !NO_DROPDOWN.has(c.k) ? `<button data-hma="dropdown" ${admin ? "" : "disabled"}>▾ ${dropdownOf(c) ? "Edit the dropdown values…" : "Make this a dropdown…"}${admin ? "" : " (admin)"}</button>` : ""}
     <button data-hma="insert" ${admin ? "" : "disabled"}>Insert a column to the right…${admin ? "" : " (admin)"}</button>
     ${c.pin ? "" : `<button data-hma="hide">${c.custom ? "Hide this column" : "Remove from view (hide)"}</button>`}
     ${c.custom ? `<button data-hma="delete" class="danger" ${admin ? "" : "disabled"}>Delete this column and its values…${admin ? "" : " (admin)"}</button>`
@@ -1624,8 +1649,33 @@ function openHeaderMenu(ci, x, y) {
     else if (a === "hide") hideColumns([c.k]);
     else if (a === "insert") addColumnDialog(c.k);
     else if (a === "protect") protectDialog(c);
+    else if (a === "dropdown") dropdownDialog(c);
     else if (a === "delete") deleteColumn(c);
   });
+}
+
+// Turn a text column into a fixed dropdown (people pick a value instead of typing), edit its values, or turn it off (admins only).
+async function dropdownDialog(c) {
+  const on = dropdownOf(c);
+  let values = on, more = false;
+  if (!on) {
+    try { const r = await api("/api/dropdowns/values?col=" + encodeURIComponent(c.k)); values = r.values; more = r.more; } catch (e) { return toast(e.message, "bad"); }
+  }
+  const body = `<p class="muted">${on ? `People can only pick one of these values in “${esc(c.l)}”.` : `People will pick a value in “${esc(c.l)}” instead of typing it. The values the column holds now are listed; add, change or remove lines as you like.`}</p>
+    <label class="field"><span>Values, one per line</span><textarea name="v" rows="10" spellcheck="false">${esc(values.join("\n"))}</textarea></label>
+    ${more ? `<p class="hint">Only the first 300 values the column holds are listed.</p>` : ""}
+    <p class="hint">A row that already holds a value not on the list keeps it until someone changes it. Typing, pasting or filling a value that isn't on the list is refused. Imports and the scraper are not checked.</p>`;
+  const r = await dialog({ title: on ? `Dropdown values for “${c.l}”` : `Make “${c.l}” a dropdown`, body,
+    actions: on ? [["Cancel", "close"], ["Back to free typing", "off", "danger"], ["Save", "ok", "primary"]] : [["Cancel", "close"], ["Make it a dropdown", "ok", "primary"]] });
+  if (r.value !== "ok" && r.value !== "off") return;
+  const list = new FormData(r.el.querySelector("form")).get("v").split("\n");
+  try {
+    await api("/api/dropdowns", { col: c.k, values: list, enabled: r.value === "ok" });
+    await ctx.refreshMeta();
+    drawHead();
+    render();
+    toast(r.value === "ok" ? `“${c.l}” is a dropdown now.` : `“${c.l}” is back to free typing.`);
+  } catch (e) { toast(e.message, "bad"); }
 }
 
 // Protect a column like "Protect range" in Google Sheets: choose who may edit it (admins only).

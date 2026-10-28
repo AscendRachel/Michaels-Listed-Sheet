@@ -141,3 +141,17 @@ def test_a_really_sold_out_product_is_still_reported_as_sold_out():
     empty = {"price": "Price not found", "availability": "Currently unavailable.", "delivery": "Delivery not found"}
     out, page, me = _run_read_again([empty, empty])
     assert out == empty and page.reloads == 1                          # waited, read, reloaded once, read again: then believed
+
+
+def test_a_dead_browser_is_told_apart_from_a_slow_page():
+    src = (ROOT / "scraper" / "scraper_app.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    ns = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "browser_gone":
+            exec(ast.get_source_segment(src, node), ns)
+    gone = ns["browser_gone"]
+    assert gone(Exception("Page.goto: Connection closed while reading from the driver"))
+    assert gone(Exception("Page.goto: Target page, context or browser has been closed"))
+    assert not gone(Exception("Page.goto: net::ERR_CONNECTION_RESET at https://www.amazon.com"))
+    assert not gone(Exception("Page.goto: Timeout 30000ms exceeded."))

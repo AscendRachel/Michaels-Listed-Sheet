@@ -312,6 +312,20 @@ async def extract(page):
             "image": await read_image(page)}
 
 
+MAX_BROWSER_RESTARTS = 5
+
+
+class BrowserGone(Exception):
+    """The browser (or the Playwright driver that controls it) closed by itself in the middle of a product."""
+
+
+def browser_gone(e) -> bool:
+    """True when the error means the browser or its driver is dead, as opposed to a slow or broken page."""
+    text = str(e).lower()
+    return any(k in text for k in ("connection closed", "target closed", "has been closed", "browser closed",
+                                   "driver", "pipe closed")) and "timeout" not in type(e).__name__.lower()
+
+
 # ---------------------------------------------------------------- the scraper engine
 class Engine:
     def __init__(self, settings, emit):
@@ -411,13 +425,41 @@ class Engine:
         self.claim_lock = asyncio.Lock()
         self.pause_factor = 1.0
         try:
-            from playwright.async_api import async_playwright
+            from playwright.async_api import async_playwright   # noqa: F401  (checked here so the message is clear)
         except ImportError:
             self.log("Playwright is missing. Run setup.bat first.")
             return
-        async with async_playwright() as pw:
-            contexts = []
-            try:
+        restarts = 0
+        try:
+            while True:
+                done_before = self.done
+                died = await self.session(restarts)
+                if not died or self.stop_flag.is_set():
+                    break
+                if self.done > done_before:
+                    restarts = 0                                     # it worked for a while: this is a new problem
+                restarts += 1
+                if restarts > MAX_BROWSER_RESTARTS:
+                    self.log("The browser keeps closing by itself, so the scraper stopped. Close other programs, lower the "
+                             "number of browser windows and press Start again.")
+                    break
+                wait = min(60, 10 * restarts)
+                self.log(f"The browser closed unexpectedly. Opening it again in {wait} seconds (try {restarts} of {MAX_BROWSER_RESTARTS}). "
+                         "No product was lost.")
+                self.set_state("running", "The browser closed. Opening it again…")
+                await self.sleep(wait)
+        finally:
+            await self.shutdown()
+
+    async def session(self, restarts):
+        """One go at running every browser window until the run is done, someone presses Stop, or the browser dies.
+        True means it died and the caller should open it again."""
+        from playwright.async_api import async_playwright
+        self.browser_died = False
+        contexts = []
+        hb = None
+        try:
+            async with async_playwright() as pw:
                 for n in range(1, int(self.s["windows"]) + 1):
                     if self.stop_flag.is_set():
                         break
@@ -426,18 +468,23 @@ class Engine:
                         contexts.append((n, ctx))
                 if not contexts:
                     self.log("No browser window could be opened.")
-                    return
+                    return restarts > 0                              # the first time it is a setup problem: do not retry
                 self.set_state("running", f"Checking products with {len(contexts)} browser window(s)")
                 hb = asyncio.create_task(self.heartbeat_loop())
                 await asyncio.gather(*(self.worker(n, ctx) for n, ctx in contexts))
-                hb.cancel()
-            finally:
-                await self.shutdown()
                 for _, ctx in contexts:
                     try:
                         await ctx.close()
                     except Exception:
                         pass
+        except Exception as e:                                       # the driver can also die while it is being closed
+            if not self.browser_died and not browser_gone(e):
+                raise
+            self.browser_died = True
+        finally:
+            if hb:
+                hb.cancel()
+        return self.browser_died
 
     async def open_browser(self, pw, n):
         profile = HERE / "profiles" / f"window{n}"
@@ -545,11 +592,16 @@ class Engine:
 
     async def worker(self, n, ctx):
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        while not self.stop_flag.is_set():
+        while not self.stop_flag.is_set() and not self.browser_died:
             item = await self.next_item()
             if not item:
                 break
-            res = await self.scrape(page, item, n)
+            try:
+                res = await self.scrape(page, item, n)
+            except BrowserGone:
+                self.buffer.appendleft(item)                 # not the product's fault: it is tried again once the browser is back
+                self.browser_died = True
+                break
             await self.send_result(res)
             self.push_stats()
             pause = random.uniform(self.conf["delay_min_seconds"], self.conf["delay_max_seconds"]) * self.pause_factor
@@ -600,6 +652,8 @@ class Engine:
                 result = "ok"
                 break
             except Exception as e:
+                if browser_gone(e):
+                    raise BrowserGone(str(e).splitlines()[0][:90])
                 result = "timeout" if "Timeout" in type(e).__name__ else "error"
                 if attempt == 2:
                     self.log(f"Window {n}: {item['sku']} failed ({str(e).splitlines()[0][:90]})")

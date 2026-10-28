@@ -239,6 +239,8 @@ def apply_cells(edits: list[dict], user: str, view_filter: dict | None = None, a
                             ovr[field] = _num(value, LABELS[field])
                     elif field in custom:
                         v = _custom_value(custom[field]["type"], value, custom[field]["label"])
+                        if v and custom[field]["type"] == "text":
+                            v = catalog.dropdown_value(c, field, v, extra.get(field), custom[field]["label"])
                         if v is None:
                             extra.pop(field, None)
                         else:
