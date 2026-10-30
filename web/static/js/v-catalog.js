@@ -111,7 +111,7 @@ function cellFlag(row, c) {                              // the sheet's single-c
   }
   if (c.k === "michaels_price") {
     const m = row.michaels_price, a = row.auto_price;
-    return m !== null && m !== undefined && m !== "" && (a === null || a === undefined || Math.abs(m - a) >= 0.005) ? "cfr" : "";
+    return !!row.inventory && m !== null && m !== undefined && m !== "" && (a === null || a === undefined || Math.abs(m - a) >= 0.005) ? "cfr" : "";
   }
   if (c.k === "inventory") return Number(row.sold_total) >= 1 ? "cfs" : "";        // the sheet turns the tick red once the product has sold
   return c.k === "delivery" && /prime/i.test(row.delivery || "") ? "cfp" : "";

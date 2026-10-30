@@ -139,7 +139,7 @@ export const QUEUE_UI = {
   "mz-missing": { cls: "warn", desc: "Listed in the catalog but missing from the latest Michaels download." },
   "mz-stock-off": { cls: "crit", desc: "Michaels quantity above 0 while your inventory flag is off." },
   "mz-zero-on": { cls: "warn", desc: "Michaels quantity is 0 while your inventory flag is on." },
-  "mz-price": { cls: "info", desc: "Michaels price isn't the automation price." },
+  "mz-price": { cls: "info", desc: "Inventory is on, but the Michaels price isn't the automation price." },
   "dq-weight": { cls: "neutral", desc: "No weight means no 3PL fee and no price." },
   "dq-fee": { cls: "neutral", desc: "Heavier than the last tier of the active fee table." },
   "dq-category": { cls: "neutral", desc: "Category is blank." },

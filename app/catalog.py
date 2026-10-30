@@ -57,7 +57,7 @@ EXTRA_QUEUES = {
     "mz-zero-on": ("Michaels at 0, inventory on", "Michaels sync",
                    "michaels_qty IS NOT NULL AND michaels_qty=0 AND COALESCE(inventory,0)<>0"),
     "mz-price": ("Michaels price differs", "Michaels sync",
-                 "COALESCE(michaels_price,0)>0 AND auto_price IS NOT NULL AND ABS(michaels_price-auto_price)>0.009"),
+                 "COALESCE(inventory,0)<>0 AND COALESCE(michaels_price,0)>0 AND auto_price IS NOT NULL AND ABS(michaels_price-auto_price)>0.009"),
     "dq-weight": ("Missing weight", "Data quality", "COALESCE(weight,0)<=0"),
     "dq-fee": ("Weight outside fee table", "Data quality",
                "COALESCE(weight,0)>0 AND auto_price IS NULL AND source_price IS NOT NULL"),
@@ -297,7 +297,7 @@ ROW_COLORS = [                    # in the order the sheet tries them: the first
 ]
 CELL_COLORS = {
     "cell_qty": f"(COALESCE(michaels_qty,0)>0 AND NOT {_ON}) OR (michaels_qty IS NOT NULL AND michaels_qty=0 AND {_ON})",
-    "cell_price": "michaels_price IS NOT NULL AND (auto_price IS NULL OR ABS(michaels_price-auto_price)>=0.005)",
+    "cell_price": f"{_ON} AND michaels_price IS NOT NULL AND (auto_price IS NULL OR ABS(michaels_price-auto_price)>=0.005)",
     "box_sold": ("COALESCE(CASE WHEN COALESCE(ovr,'')<>'' THEN json_extract(ovr,'$.sold_total') END, "
                  "COALESCE(sold_2025,0)+COALESCE(sold_2026,0))>=1"),
     "text_prime": "COALESCE(delivery,'') LIKE '%prime%'",

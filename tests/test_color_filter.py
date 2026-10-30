@@ -33,6 +33,17 @@ def test_column_conditions_and_sort_by_colour(loaded):
     assert ask(sort="color:nonsense") == ask()                                     # an unknown colour leaves the order alone
 
 
+def test_price_differences_only_count_for_products_with_inventory_on(loaded):
+    c = db.conn()
+    c.execute("UPDATE products SET michaels_price=99, auto_price=10, inventory=1 WHERE sku='SKU-1'")
+    c.execute("UPDATE products SET michaels_price=99, auto_price=10, inventory=0 WHERE sku='SKU-2'")
+    assert loaded.get("/api/queues").json()["counts"]["mz-price"] == 1
+    assert loaded.post("/api/sheet/skus", json={"queue": "mz-price"}).json()["skus"] == ["SKU-1"]
+    assert _skus(loaded, "cell_price") == ["SKU-1"]                           # the red cell follows the same rule
+    csv = loaded.get("/api/export/michaels-fixes.csv")
+    assert csv.status_code == 200 and "SKU-1" in csv.text and "SKU-2" not in csv.text         # the price-fix export too
+
+
 def test_filter_by_colour_finds_the_rows_the_grid_paints(loaded):
     # SKU-1 High Price, SKU-2 Out of Stock (both with Inventory on), SKU-3 Inventory off but the marketplace has stock,
     # SKU-4 Inventory on and marketplace stock (no colour at all)
