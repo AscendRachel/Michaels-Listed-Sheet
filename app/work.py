@@ -43,7 +43,7 @@ def start(user: dict, name: str, params: dict, skus: list) -> dict:
     if not skus:
         raise ValueError("There are no rows in this view to work through.")
     name = (str(name or "").strip() or "Work list")[:80]
-    keep = {k: v for k, v in (params or {}).items() if (k in ("q", "queue", "sort") or str(k).startswith("cf_")) and v}
+    keep = {k: v for k, v in (params or {}).items() if (k in ("q", "queue", "sort", "color") or str(k).startswith("cf_")) and v}
     with tx() as c:
         cur = c.execute("INSERT INTO worklists(username, user_name, name, params, skus, created_at, state) VALUES(?,?,?,?,?,?, 'open')",
                         (user["username"], user["name"], name, json.dumps(keep), json.dumps(skus), now_str()))

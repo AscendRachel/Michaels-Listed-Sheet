@@ -125,6 +125,8 @@ CREATE TABLE IF NOT EXISTS column_locks(col TEXT PRIMARY KEY, mode TEXT, users T
 CREATE TABLE IF NOT EXISTS deleted_products(id INTEGER PRIMARY KEY AUTOINCREMENT, sku TEXT, at TEXT, by TEXT, data TEXT);
 CREATE TABLE IF NOT EXISTS custom_columns(key TEXT PRIMARY KEY, label TEXT, type TEXT, after TEXT,
   created_by TEXT, created_at TEXT);
+CREATE TABLE IF NOT EXISTS versions(id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, kind TEXT, name TEXT, by TEXT,
+  rows INTEGER, activity_id INTEGER, size INTEGER);
 CREATE TABLE IF NOT EXISTS saved_views(id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, name TEXT,
   params TEXT, shared INTEGER DEFAULT 0, created_at TEXT);
 """

@@ -188,8 +188,6 @@ main:has(.sheetpage) { max-width: none; padding-top: 14px; padding-bottom: 20px;
 .hc .sb:hover, .hc .sb.on { color: var(--brand); background: var(--panel); }
 .hc .rz { position: absolute; right: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 2; }
 .hc .rz:hover { background: var(--brand); opacity: .4; }
-.frow .hc { background: var(--panel); padding: 3px 4px; }
-.hc.fc input, .hc.fc select { width: 100%; padding: 3px 6px; font-size: 12px; border-radius: 5px; background: var(--panel); }
 .gbody { position: relative; }
 .gr { position: absolute; left: 0; display: flex; height: 30px; }
 .gc { flex: none; box-sizing: border-box; height: 30px; padding: 0 8px; line-height: 29px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--panel); user-select: none; }
@@ -206,6 +204,52 @@ main:has(.sheetpage) { max-width: none; padding-top: 14px; padding-bottom: 20px;
 /* a row that was fixed or edited is not faded; only one whose Inventory got unchecked gets a soft tint */
 .gr.invoff .gc:not(.s):not(.a) { background: var(--warn-bg); }
 .gr.gone .gc.rn::after { content: "•"; color: var(--warn); margin-left: 2px; }
+/* row colours: the Google Sheet's conditional formatting (see ROW_RULES in v-catalog.js); the same colours in light and dark mode */
+.gr[class*="rc-"] .gc.rcc:not(.s):not(.a) { color: #000; }
+.gr.rc-oos .gc.rcc:not(.s):not(.a) { background: #00ff00; }
+.gr.rc-tf .gc.rcc:not(.s):not(.a) { background: #ff00ff; }
+.gr.rc-chk .gc.rcc:not(.s):not(.a) { background: #00ffff; }
+.gr.rc-hp .gc.rcc:not(.s):not(.a) { background: #ff0000; }
+.gr.rc-li .gc.rcc:not(.s):not(.a) { background: #ff9900; }
+.gr.rc-lp .gc.rcc:not(.s):not(.a) { background: #cccccc; }
+.gr.rc-mc .gc.rcc:not(.s):not(.a) { background: #a4c2f4; }
+.gr.rc-oosdi .gc.rcc:not(.s):not(.a) { background: #b7e1cd; }
+.gr.rc-oosv .gc.rcc:not(.s):not(.a) { background: #ffff00; }
+.gr.rc-mzoff .gc.rcc:not(.s):not(.a) { background: #8e7cc3; }
+.gr.rc-mzzero .gc.rcc:not(.s):not(.a) { background: #38761d; color: #fff; }
+.gr.rc-mzzero .gc.rcc.pin:not(.s):not(.a), .gr.rc-mzzero .gc.rcc .muted { color: #fff; }
+.gc.cfr:not(.s):not(.a) { background: #ff0000; color: #fff; }
+.gc.cfp, .gr[class*="rc-"] .gc.rcc.cfp:not(.s):not(.a) { color: #ff0000; }
+.gr.rc-hp .gc.rcc.cfp:not(.s):not(.a) { color: #000; }       /* red text would vanish on a red row */
+.gc.cfs .cbx { accent-color: #9b1c3a; outline: 2px solid #9b1c3a; outline-offset: 1px; border-radius: 3px; }      /* the sheet's red tick, in a softer wine that reads on every row colour */
+/* the column menu: branches open to the side (fixed, so the menu's own scrolling can't clip them), sections fold open */
+.colmenu { padding: 6px; overflow: visible; box-sizing: border-box; }
+.colmenu * { box-sizing: border-box; }
+.colmenu .mhead { max-width: none; }
+.colmenu .mi-btn { display: flex; justify-content: space-between; width: 100%; }
+.colmenu .mi-sub.dis .mi-btn { opacity: .45; cursor: not-allowed; }
+.colmenu .mi-sub.open > .mi-btn { background: var(--soft); }
+.colmenu .flyout { display: none; position: fixed; z-index: 80; min-width: 250px; max-height: 70vh; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.28); padding: 6px; }
+.colmenu .mi-sub.open > .flyout { display: grid; }
+.colmenu .flyout button { display: flex; align-items: center; gap: 8px; }
+.colmenu .cfrow { display: flex; align-items: center; gap: 8px; padding: 5px 8px; cursor: pointer; }
+.colmenu .cfrow:hover { background: var(--soft); }
+.colmenu .mi-acc { display: flex; gap: 6px; width: 100%; font-weight: 500; }
+.colmenu .acc-body { padding: 2px 10px 8px; }
+.colmenu .acc-body[hidden] { display: none; }
+.colmenu .acc-body select, .colmenu .acc-body input[name] { width: 100%; margin: 3px 0; box-sizing: border-box; }
+.colmenu .acc-body .psearch { width: 100%; margin: 2px 0 6px; box-sizing: border-box; }
+.colmenu .plist { height: 220px; overflow-y: auto; overflow-x: hidden; border: 1px solid var(--line); border-radius: 6px; padding: 4px; }
+.colmenu .prow { display: flex; gap: 8px; align-items: flex-start; padding: 3px 4px; cursor: pointer; }
+.colmenu .prow input { flex: none; margin-top: 3px; }
+/* a long value goes on to a second line, and a very long one ends in … (hover shows all of it) */
+.colmenu .prow .pv { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; line-height: 1.35; }
+.colmenu .prow .pn { flex: none; }
+.colmenu .prow:hover { background: var(--soft); }
+.colmenu .prow2 { display: flex; gap: 6px; align-items: center; padding: 6px 0 2px; }
+.colmenu .prow2 button:not(.btn) { background: none; border: 0; color: var(--brand); cursor: pointer; padding: 2px 4px; font: inherit; }
+.colmenu .prow2 .pcount { margin-left: auto; font-size: 12px; }
+.rc-swatch { width: 28px; height: 16px; border-radius: 3px; border: 1px solid var(--line); display: inline-block; }
 .editor { position: absolute; z-index: 4; box-sizing: border-box; border: 2px solid var(--brand); border-radius: 0; padding: 0 8px; font-size: 13px; background: var(--panel); }
 .statusbar { display: flex; justify-content: space-between; gap: 16px; padding: 6px 10px; color: var(--muted); font-size: 12.5px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 8px 8px; background: var(--soft); }
 .colgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 14px; max-height: 50vh; overflow: auto; margin-top: 8px; }
@@ -270,23 +314,6 @@ main:has(.sheetpage) { max-width: none; padding-top: 14px; padding-bottom: 20px;
 .imgbtn.thumbbtn { padding: 1px; line-height: 0; background: #fff; border-color: var(--line); }
 .imgbtn.thumbbtn img { height: 24px; width: 34px; object-fit: contain; display: block; }
 .imgbtn.thumbbtn:hover { border-color: var(--brand); }
-
-/* value picker under a column's filter button */
-.hc.fc .fwrap { display: flex; gap: 2px; width: 100%; }
-.hc.fc .fwrap input { flex: 1; min-width: 0; }
-.hc.fc .fwrap input.on::placeholder { color: var(--brand); opacity: 1; font-weight: 600; }
-.fpick { border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 5px; font-size: 12px; cursor: pointer; padding: 2px 6px; }
-.fpick.wide { width: 100%; text-align: left; padding: 3px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.fpick.on { color: var(--brand); border-color: var(--brand); font-weight: 600; }
-.pickmenu { display: block; padding: 8px; }
-.pickmenu .psearch { width: 100%; margin: 2px 0 6px; }
-.pickmenu .plist { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: 4px; }
-.pickmenu .prow { display: flex; gap: 8px; align-items: center; padding: 3px 4px; cursor: pointer; }
-.pickmenu .prow .pv { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pickmenu .prow:hover { background: var(--soft); }
-.pickmenu .prow2 { display: flex; gap: 6px; align-items: center; padding: 6px 0 2px; }
-.pickmenu .prow2 button:not(.btn) { background: none; border: 0; color: var(--brand); cursor: pointer; padding: 2px 4px; font: inherit; }
-.pickmenu .prow2 .pcount { margin-left: auto; font-size: 12px; }
 
 /* new rows at the bottom of the sheet, and the drag-fill handle */
 .draftbar { gap: 10px; align-items: center; padding: 6px 10px; margin-bottom: 6px; background: var(--brand-soft); border: 1px solid var(--brand); border-radius: 8px; }

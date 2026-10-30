@@ -12,7 +12,7 @@ import time
 import traceback
 from datetime import datetime
 
-from . import db, rules, titles
+from . import db, rules, titles, versions
 from .db import AMAZON_BASE, conn, log_activity, now_str, tx
 from .rules import to_bool, to_float
 
@@ -114,6 +114,7 @@ def import_products(filename: str, data: bytes, user: str, progress=None) -> dic
         })
 
     note("Saving the products", 0, len(records))
+    versions.take_if_edited(f"Before importing {filename}"[:120], user)      # so the import can be rolled back from Version history
     with tx() as c:
         st = db.get_settings(c)
         pr, tf, tt = db.get_pricing(c), float(st["timeframe_days"]), float(st["title_threshold"])
@@ -444,6 +445,7 @@ def mz_apply(token: str, clear_missing: bool, user: str, progress=None) -> dict:
     rows, now = pending["rows"], now_str()
     has_images = pending.get("has_images", False)
     updated = cleared = with_images = 0
+    versions.take_if_edited("Before the Michaels import", user)
     with tx() as c:
         products = c.execute("SELECT sku FROM products WHERE active=1").fetchall()
         for n, p in enumerate(products, start=1):

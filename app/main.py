@@ -15,7 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, brand, catalog, db, imports, protect, scraper, sheet, sold, version, work
+from . import auth, brand, catalog, db, imports, protect, scraper, sheet, sold, version, versions, work
 from .auth import admin_user, current_user
 from .db import ROOT, conn, now_str, tx
 
@@ -271,6 +271,42 @@ def set_dropdown(u=Depends(admin_user), b: dict = Depends(jbody)):
 @app.get("/api/dropdowns/values")
 def dropdown_values(col: str, u=Depends(current_user)):
     return catalog.distinct_values(col)
+
+
+# ------------------------------------------------------------------ version history
+@app.get("/api/versions")
+def versions_list(u=Depends(current_user)):
+    return versions.listing()
+
+
+@app.post("/api/versions")
+def versions_save(u=Depends(current_user), b: dict = Depends(jbody)):
+    """Save the catalog as it is now under a name (kept for good)."""
+    return versions.save_named(b.get("name"), u["name"])
+
+
+@app.get("/api/versions/{vid}/changes")
+def versions_changes(vid: int, q: str = "", kind: str = "", offset: int = 0, u=Depends(current_user)):
+    return versions.changes(vid, q, kind, max(0, offset))
+
+
+@app.post("/api/versions/{vid}/restore")
+def versions_restore(vid: int, u=Depends(current_user), b: dict = Depends(jbody)):
+    """Put products back as they were in that version. Restoring everything is for admins; anyone can restore chosen products."""
+    everything = bool(b.get("everything"))
+    if everything and u.get("role") != "admin":
+        raise HTTPException(403, "Only an admin can restore everything. Tick the products you need and restore those.")
+    return versions.restore(u, vid, b.get("skus") or [], everything, bool(b.get("remove_added")))
+
+
+@app.post("/api/versions/{vid}/name")
+def versions_name(vid: int, u=Depends(current_user), b: dict = Depends(jbody)):
+    return versions.rename(vid, b.get("name"))
+
+
+@app.post("/api/versions/{vid}/delete")
+def versions_delete(vid: int, u=Depends(admin_user)):
+    return versions.delete(vid, u["name"])
 
 
 @app.get("/api/queues")

@@ -5,8 +5,8 @@ import { openDrawer } from "./drawer.js";
 import { amazonSized, openCarousel } from "./carousel.js";
 import { nextSeries } from "./fill.js";
 
-const RH = 30, HEAD_H = 36, FILT_H = 32, NUM_W = 56;
-const HEADERS_H = HEAD_H + FILT_H;
+const RH = 30, HEAD_H = 36, NUM_W = 56;
+const HEADERS_H = HEAD_H;                  // the header is one row: filters and sorting live in each column's ▾ menu
 const PAGE_ROWS = 400;
 
 // ---- new rows: blank rows at the bottom of the grid. They live in the browser until "Save new rows" creates the products.
@@ -86,6 +86,37 @@ const PRESETS = {
   "Michaels": ["img", "amz_img", "sku", "name", "listed", "inventory", "auto_price", "michaels_sku_number", "michaels_price", "michaels_qty", "sold_total"],
 };
 
+// Row colours: the same rules as the Google Sheet's conditional formatting on the Listed Sheet tab (the colours are in app.css).
+// The first rule that fits wins, like in the sheet. The colour covers the sheet's columns A to Z, not the later ones.
+const ROW_RULES = [
+  { k: "oos", c: "#00ff00", label: "Out of Stock", when: "Inventory is on", test: (r) => r.status === "Out of Stock" && !!r.inventory },
+  { k: "tf", c: "#ff00ff", label: "TimeFrame", when: "Inventory is on", test: (r) => r.status === "TimeFrame" && !!r.inventory },
+  { k: "chk", c: "#00ffff", label: "Check Inventory", when: "Inventory is off", test: (r) => r.status === "Check Inventory" && !r.inventory },
+  { k: "hp", c: "#ff0000", label: "High Price", when: "Inventory is on", test: (r) => r.status === "High Price" && !!r.inventory },
+  { k: "li", c: "#ff9900", label: "Low Inventory", when: "Inventory is on", test: (r) => r.status === "Low Inventory" && !!r.inventory },
+  { k: "lp", c: "#cccccc", label: "Low Price", when: "Inventory is on", test: (r) => r.status === "Low Price" && !!r.inventory },
+  { k: "mc", c: "#a4c2f4", label: "Manual Check", when: "Inventory is on", test: (r) => r.status === "Manual Check" && !!r.inventory },
+  { k: "oosdi", c: "#b7e1cd", label: "OOS Different Item", when: "Inventory is on", test: (r) => r.status === "OOS Different Item" && !!r.inventory },     // not in the sheet: added later
+  { k: "oosv", c: "#ffff00", label: "OOS Variation", when: "Inventory is on", test: (r) => r.status === "OOS Variation" && !!r.inventory },
+  { k: "mzoff", c: "#8e7cc3", label: "Marketplace has stock", when: "but Inventory is off", test: (r) => Number(r.michaels_qty) > 0 && !r.inventory },
+  { k: "mzzero", c: "#38761d", label: "No marketplace stock", when: "but Inventory is on", test: (r) => !!r.inventory && !Number(r.michaels_qty) },
+];
+const ROW_COLOR_COLS = new Set(["img", "amz_img", "sku", "asin", "price", "availability", "delivery", "listed", "inventory", "category", "name", "link", "source",
+  "listing_status", "weight", "source_price", "fee", "cost", "selling", "markup_pct", "auto_price", "variation", "upc", "status", "run_at"]);
+const rowRule = (row) => ROW_RULES.find((x) => x.test(row));
+function cellFlag(row, c) {                              // the sheet's single-cell rules: white on red when the marketplace disagrees, red text for Prime delivery
+  if (c.k === "michaels_qty") {
+    const q = row.michaels_qty;
+    return (Number(q) > 0 && !row.inventory) || (q !== null && q !== undefined && q !== "" && Number(q) === 0 && !!row.inventory) ? "cfr" : "";
+  }
+  if (c.k === "michaels_price") {
+    const m = row.michaels_price, a = row.auto_price;
+    return m !== null && m !== undefined && m !== "" && (a === null || a === undefined || Math.abs(m - a) >= 0.005) ? "cfr" : "";
+  }
+  if (c.k === "inventory") return Number(row.sold_total) >= 1 ? "cfs" : "";        // the sheet turns the tick red once the product has sold
+  return c.k === "delivery" && /prime/i.test(row.delivery || "") ? "cfp" : "";
+}
+
 let S, ctx, root, el = {}, wired = false;
 
 // ------------------------------------------------------------------ helpers
@@ -164,66 +195,199 @@ const pickedOf = (v) => {
 };
 const pickLabel = (p) => (p.mode === "notin" ? `all except ${p.vals.length}` : p.vals.length === 1 ? p.vals[0] : `${p.vals.length} selected`);
 
-async function openPicker(c, anchor) {
-  document.querySelector(".pickmenu")?.remove();
-  const rect = anchor.getBoundingClientRect();
+// ---- the column menu: the ▾ in a column's header or filter row. Like Google Sheets it holds sort, filter by colour, filter by
+// condition and filter by values, and below them the column's own actions (protect, dropdown, insert, hide, delete).
+const COND_TEXT = [["", "None"], ["(blank)", "Is empty"], ["(not blank)", "Is not empty"], ["contains", "Text contains"], ["nc", "Text does not contain"],
+  ["sw", "Text starts with"], ["ew", "Text ends with"], ["eq", "Text is exactly"]];
+const COND_NUM = [["", "None"], ["(blank)", "Is empty"], ["(not blank)", "Is not empty"], [">", "Greater than"], [">=", "Greater than or equal to"],
+  ["<", "Less than"], ["<=", "Less than or equal to"], ["=", "Is equal to"], ["!=", "Is not equal to"], ["..", "Is between"]];
+const condKind = (c) => (c.t === "money" || c.t === "num" ? "num" : c.t === "text" ? "text" : "");
+function condOf(v, kind) {                                // the condition a stored filter value stands for, to fill the form in again
+  v = String(v || "");
+  if (!v || pickedOf(v)) return { op: "", a: "", b: "" };
+  if (v === "(blank)" || v === "(not blank)") return { op: v, a: "", b: "" };
+  if (kind === "text") { const m = /^(nc|sw|ew|eq):([\s\S]*)$/.exec(v); return m ? { op: m[1], a: m[2], b: "" } : { op: "contains", a: v, b: "" }; }
+  const r = /^\s*(-?\$?[\d.]+?)\s*\.\.\s*(-?\$?[\d.]+)\s*$/.exec(v);
+  if (r) return { op: "..", a: r[1], b: r[2] };
+  const m = /^(>=|<=|!=|>|<|=)?\s*([\s\S]*)$/.exec(v);
+  return { op: m[1] || "=", a: m[2], b: "" };
+}
+function condString(op, a, b, kind) {
+  if (!op) return "";
+  if (op === "(blank)" || op === "(not blank)") return op;
+  a = (a || "").trim(); b = (b || "").trim();
+  if (!a) return "";
+  if (kind === "text") return op === "contains" ? a : `${op}:${a}`;
+  if (op === "..") return b ? `${a}..${b}` : "";
+  return `${op}${a}`;
+}
+function colorsOf(c) {                                    // the colours that can show in this column (the grid paints rows from A to Z, and a few single cells)
+  const fill = [], text = [];
+  if (ROW_COLOR_COLS.has(c.k)) { ROW_RULES.forEach((x) => fill.push({ k: x.k, label: x.label, c: x.c })); fill.push({ k: "none", label: "No fill colour", c: "transparent" }); }
+  if (c.k === "michaels_qty") fill.push({ k: "cell_qty", label: "Red: disagrees with Inventory", c: "#ff0000" });
+  if (c.k === "michaels_price") fill.push({ k: "cell_price", label: "Red: differs from the automation price", c: "#ff0000" });
+  if (c.k === "delivery") text.push({ k: "text_prime", label: "Red text: Prime delivery", c: "#ff0000" });
+  if (c.k === "inventory") text.push({ k: "box_sold", label: "Wine box: the product has sold", c: "#9b1c3a" });
+  return { fill, text };
+}
+
+function openColumnMenu(c, x, y, showValues) {
+  document.querySelector(".colmenu")?.remove();
+  document.querySelector(".hmenu")?.remove();
+  const admin = ctx.isAdmin();
+  const filterable = !NO_FILTER.has(c.k) && c.t !== "img" && c.t !== "amzimg";
+  const kind = condKind(c), hasValues = filterable && (c.t === "status" || c.t === "bool" || pickable(c));
+  const hasColors = (() => { const k = colorsOf(c); return k.fill.length + k.text.length > 0; })();
+  const cols = colorsOf(c), onColors = new Set(S.F.color ? S.F.color.split(",") : []);
+  const cond = condOf(S.F.cf[c.k], kind), sorted = S.F.sort === c.k ? "asc" : S.F.sort === "-" + c.k ? "desc" : "";
+  const swatch = (col) => `<span class="rc-swatch" style="background:${col}"></span>`;
+  const group = (title, list, row) => (list.length ? `<div class="mhead">${title}</div>${list.map(row).join("")}` : "");
+  const sortRow = (x) => `<button type="button" data-hma="sortcolor" data-k="${x.k}">${swatch(x.c)} ${esc(x.label)}${S.F.sort === "color:" + x.k ? " ✓" : ""}</button>`;
+  const filterRow = (x) => `<label class="check cfrow"><input type="checkbox" data-color="${x.k}" ${onColors.has(x.k) ? "checked" : ""}> ${swatch(x.c)} <span>${esc(x.label)}</span></label>`;
+  const sub = (label, body) => `<div class="mi-sub ${body ? "" : "dis"}"><button type="button" class="mi-btn" ${body ? "" : "disabled"}><span>${label}</span><span class="arr">▸</span></button>
+    ${body ? `<div class="flyout">${body}</div>` : ""}</div>`;
+  const acc = (id, label, body, open) => `<button type="button" class="mi-acc" data-acc="${id}"><span class="tri">${open ? "▾" : "▸"}</span> ${label}</button><div class="acc-body" data-body="${id}" ${open ? "" : "hidden"}>${body}</div>`;
+  const opts = (list, sel) => list.map(([v, l]) => `<option value="${esc(v)}" ${v === sel ? "selected" : ""}>${l}</option>`).join("");
+
   const m = document.createElement("div");
-  m.className = "menu hmenu pickmenu";
-  m.style.cssText = `position:fixed;left:${Math.max(8, Math.min(rect.left, innerWidth - 320))}px;top:${Math.min(rect.bottom + 4, innerHeight - 420)}px;width:300px`;
-  m.innerHTML = `<div class="mhead">${esc(c.l)}: loading…</div>`;
+  m.className = "menu hmenu colmenu";
+  m.style.cssText = `position:fixed;left:${Math.max(8, Math.min(x, innerWidth - 340))}px;top:${Math.max(8, Math.min(y + 4, innerHeight - 120))}px;width:330px`;
+  m.innerHTML = `<div class="mhead">${esc(c.l)}</div>
+    <button type="button" data-hma="asc">Sort A → Z${sorted === "asc" ? " ✓" : ""}</button><button type="button" data-hma="desc">Sort Z → A${sorted === "desc" ? " ✓" : ""}</button>
+    ${S.F.sort ? `<button type="button" data-hma="nosort">Clear sort</button>` : ""}
+    ${sub("Sort by color", hasColors ? group("Fill colour", cols.fill, sortRow) + group("Text colour", cols.text, sortRow) : "")}<hr>
+    ${filterable ? `${sub("Filter by color", hasColors ? group("Fill colour", cols.fill, filterRow) + group("Text colour", cols.text, filterRow)
+        + `<div class="prow2"><button type="button" class="btn small primary" data-hma="colorapply">Apply</button><button type="button" data-hma="colorclear">Clear</button></div>` : "")}
+      ${kind ? acc("cond", "Filter by condition", `<select name="op">${opts(kind === "text" ? COND_TEXT : COND_NUM, cond.op)}</select>
+        <input name="a" placeholder="Value" value="${esc(cond.a)}" ${!cond.op || cond.op.startsWith("(") ? "hidden" : ""}>
+        <input name="b" placeholder="and" value="${esc(cond.b)}" ${cond.op === ".." ? "" : "hidden"}>
+        <div class="prow2"><button type="button" class="btn small primary" data-hma="condapply">Apply</button><button type="button" data-hma="condclear">Remove</button></div>`, false) : ""}
+      ${hasValues ? acc("values", "Filter by values", `<div class="mhead vload">Loading…</div>`, !!showValues) : ""}<hr>` : ""}
+    ${c.t === "img" || c.t === "amzimg" ? "" : `<button type="button" data-hma="protect" ${admin ? "" : "disabled"}>🔒 ${lockOf(c.k) ? "Change protection…" : "Protect this column…"}${admin ? "" : " (admins only)"}</button>
+      ${lockOf(c.k) && !admin ? `<div class="mhead">${esc(lockTip(c.k))}</div>` : ""}`}
+    ${c.t === "text" && !c.calc && !NO_DROPDOWN.has(c.k) ? `<button type="button" data-hma="dropdown" ${admin ? "" : "disabled"}>▾ ${dropdownOf(c) ? "Edit the dropdown values…" : "Make this a dropdown…"}${admin ? "" : " (admin)"}</button>` : ""}
+    <button type="button" data-hma="insert" ${admin ? "" : "disabled"}>Insert a column to the right…${admin ? "" : " (admin)"}</button>
+    ${c.pin ? "" : `<button type="button" data-hma="hide">${c.custom ? "Hide this column" : "Remove from view (hide)"}</button>`}
+    ${c.custom ? `<button type="button" data-hma="delete" class="danger" ${admin ? "" : "disabled"}>Delete this column and its values…${admin ? "" : " (admin)"}</button>`
+               : `<div class="mhead">A built-in column can't be deleted (pricing and statuses depend on it). Removing it only hides it, and <b>Columns</b> brings it back.</div>`}`;
   document.body.append(m);
-  const close = (ev) => { if (!m.contains(ev.target) || ev.type === "keydown" && ev.key === "Escape") { m.remove(); document.removeEventListener("mousedown", close, true); document.removeEventListener("keydown", close, true); } };
-  setTimeout(() => { document.addEventListener("mousedown", close, true); document.addEventListener("keydown", close, true); }, 0);
-  let res;
-  try {
-    const p = filterParams();
-    delete p["cf_" + c.k];
-    res = await api("/api/sheet/values", { ...p, col: c.k });          // sent in the body: the filters can be long
-  } catch (e) { m.remove(); return toast(e.message, "bad"); }
-  const values = res.values, cur = S.F.cf[c.k] || "";
-  const pk = pickedOf(cur), same = (list, x) => list.some((p) => String(p).toLowerCase() === x.v.toLowerCase());
-  const on = new Set((pk ? values.filter((x) => (pk.mode === "notin" ? !same(pk.vals, x) : same(pk.vals, x)))
-    : cur && (c.t === "status" || c.t === "bool") ? values.filter((x) => same([cur], x)) : values).map((x) => x.v));
-  let term = "";
-  const shown = () => values.filter((x) => x.v.toLowerCase().includes(term));
-  const draw = () => {
-    const list = shown();
-    m.querySelector(".plist").innerHTML = list.length
-      ? list.map((x) => `<label class="check prow"><input type="checkbox" data-v="${esc(x.v)}" ${on.has(x.v) ? "checked" : ""}> <span class="pv">${esc(x.v)}</span><span class="muted pn">${fmt(x.n)}</span></label>`).join("")
-      : `<div class="mhead">Nothing matches.</div>`;
-    m.querySelector("[data-pa='ok']").disabled = on.size === 0;
-    m.querySelector(".pcount").textContent = `${on.size} of ${values.length} ticked`;
+  // The menu never scrolls: it moves up to fit the screen, and the value list (a fixed height) shrinks if the screen is short.
+  const fit = () => {
+    const pl = m.querySelector(".plist"), open = pl && !pl.closest("[hidden]");
+    if (pl) pl.style.height = "220px";
+    if (open && m.offsetHeight > innerHeight - 16) pl.style.height = `${Math.max(90, 220 - (m.offsetHeight - (innerHeight - 16)))}px`;
+    m.style.top = `${Math.max(8, Math.min(parseFloat(m.style.top), innerHeight - 8 - m.offsetHeight))}px`;
   };
-  m.innerHTML = `<div class="mhead">${esc(c.l)}${res.truncated ? " (first 500 values)" : ""}</div>
-    <input class="psearch" type="search" placeholder="Search values" aria-label="Search values">
-    <div class="prow2"><button type="button" data-pa="all">Select all</button><button type="button" data-pa="none">Clear</button><span class="muted pcount"></span></div>
-    <div class="plist"></div>
-    <div class="prow2"><button type="button" class="btn small primary" data-pa="ok">Apply</button><button type="button" class="btn small" data-pa="cancel">Cancel</button>
-      ${cur ? `<button type="button" data-pa="off">Remove filter</button>` : ""}</div>`;
-  draw();
-  const search = m.querySelector(".psearch");
-  search.focus();
-  search.oninput = () => { term = search.value.trim().toLowerCase(); draw(); };
-  m.addEventListener("change", (e) => { const v = e.target.dataset.v; if (v !== undefined) { e.target.checked ? on.add(v) : on.delete(v); draw(); } });
-  m.addEventListener("click", (e) => {
-    const b = e.target.closest("[data-pa]");
+  fit();
+
+  const close = (ev) => {
+    if (ev.type === "keydown" ? ev.key === "Escape" : !m.contains(ev.target)) { m.remove(); document.removeEventListener("mousedown", close, true); document.removeEventListener("keydown", close, true); }
+  };
+  setTimeout(() => { document.addEventListener("mousedown", close, true); document.addEventListener("keydown", close, true); }, 0);
+  const done = () => { m.remove(); document.removeEventListener("mousedown", close, true); document.removeEventListener("keydown", close, true); };
+
+  // the branches (sort by colour, filter by colour) open beside the item, on hover or on a click
+  const openSub = (s) => {
+    m.querySelectorAll(".mi-sub.open").forEach((o) => { if (o !== s) o.classList.remove("open"); });
+    const fl = s.querySelector(".flyout");
+    if (!fl || s.classList.contains("dis")) return;
+    s.classList.add("open");
+    const r = s.getBoundingClientRect(), w = fl.offsetWidth || 260;
+    fl.style.left = `${r.right + w + 8 > innerWidth ? Math.max(8, r.left - w + 4) : r.right - 4}px`;
+    fl.style.top = `${Math.max(8, Math.min(r.top, innerHeight - fl.offsetHeight - 8))}px`;
+  };
+  m.addEventListener("mouseover", (e) => {
+    const s = e.target.closest(".mi-sub");
+    if (s) openSub(s); else m.querySelectorAll(".mi-sub.open").forEach((o) => o.classList.remove("open"));
+  });
+
+  // Filter by values: loaded when the section is first opened
+  let valuesReady = false, values = [], on = new Set(), term = "";
+  const host = m.querySelector('[data-body="values"]');
+  const draw = () => {
+    const list = values.filter((v) => v.v.toLowerCase().includes(term));
+    host.querySelector(".plist").innerHTML = list.length
+      ? list.map((v) => `<label class="check prow" title="${esc(v.v)}"><input type="checkbox" data-v="${esc(v.v)}" ${on.has(v.v) ? "checked" : ""}> <span class="pv">${esc(v.v)}</span><span class="muted pn">${fmt(v.n)}</span></label>`).join("")
+      : `<div class="mhead">Nothing matches.</div>`;
+    host.querySelector('[data-hma="valok"]').disabled = on.size === 0;
+    host.querySelector(".pcount").textContent = `${on.size} of ${values.length} ticked`;
+  };
+  async function loadValues() {
+    if (valuesReady || !host) return;
+    valuesReady = true;
+    let res;
+    try {
+      const p = filterParams();
+      delete p["cf_" + c.k];
+      res = await api("/api/sheet/values", { ...p, col: c.k });          // sent in the body: the filters can be long
+    } catch (e) { host.innerHTML = `<div class="mhead">${esc(e.message)}</div>`; return; }
+    values = res.values;
+    const cur = S.F.cf[c.k] || "", pk = pickedOf(cur), same = (list, v) => list.some((p) => String(p).toLowerCase() === v.v.toLowerCase());
+    on = new Set((pk ? values.filter((v) => (pk.mode === "notin" ? !same(pk.vals, v) : same(pk.vals, v)))
+      : cur && (c.t === "status" || c.t === "bool") ? values.filter((v) => same([cur], v)) : values).map((v) => v.v));
+    host.innerHTML = `${res.truncated ? `<div class="mhead">First 500 values</div>` : ""}<input class="psearch" type="search" placeholder="Search values" aria-label="Search values">
+      <div class="prow2"><button type="button" data-hma="valall">Select all</button><button type="button" data-hma="valnone">Clear</button><span class="muted pcount"></span></div>
+      <div class="plist"></div>
+      <div class="prow2"><button type="button" class="btn small" data-hma="close">Cancel</button><button type="button" class="btn small primary" data-hma="valok">OK</button></div>`;
+    draw();
+    fit();
+    host.querySelector(".psearch").oninput = (ev) => { term = ev.target.value.trim().toLowerCase(); draw(); };
+    if (showValues) host.querySelector(".psearch").focus();
+  }
+  if (showValues && host) loadValues();
+  m.addEventListener("change", (e) => {
+    const v = e.target.dataset?.v;
+    if (v !== undefined) { e.target.checked ? on.add(v) : on.delete(v); draw(); }
+    if (e.target.name === "op") {                          // the value boxes follow the chosen condition
+      const op = e.target.value;
+      m.querySelector('input[name="a"]').hidden = !op || op.startsWith("(");
+      m.querySelector('input[name="b"]').hidden = op !== "..";
+    }
+  });
+  m.addEventListener("click", async (e) => {
+    const ab = e.target.closest("[data-acc]");
+    if (ab) {
+      const body = m.querySelector(`[data-body="${ab.dataset.acc}"]`);
+      body.hidden = !body.hidden;
+      ab.querySelector(".tri").textContent = body.hidden ? "▸" : "▾";
+      if (!body.hidden && ab.dataset.acc === "values") loadValues();
+      fit();
+      return;
+    }
+    const sb = e.target.closest(".mi-btn");
+    if (sb) return openSub(sb.closest(".mi-sub"));
+    const b = e.target.closest("[data-hma]");
     if (!b || b.disabled) return;
-    const a = b.dataset.pa;
-    if (a === "all") { shown().forEach((x) => on.add(x.v)); return draw(); }
-    if (a === "none") { on.clear(); return draw(); }                    // Clear unticks every value, even ones hidden by the search
-    m.remove();
-    document.removeEventListener("mousedown", close, true);
-    document.removeEventListener("keydown", close, true);
-    if (a === "cancel") return;
-    const ticked = values.filter((x) => on.has(x.v)).map((x) => x.v), unticked = values.filter((x) => !on.has(x.v)).map((x) => x.v);
-    S.F.cf[c.k] = a === "off" || on.size === values.length ? "" : on.size * 2 > values.length ? "notin:" + JSON.stringify(unticked) : "in:" + JSON.stringify(ticked);
-    drawHead();
-    loadView(true);
+    const a = b.dataset.hma;
+    if (a === "valall") { values.filter((v) => v.v.toLowerCase().includes(term)).forEach((v) => on.add(v.v)); return draw(); }
+    if (a === "valnone") { on.clear(); return draw(); }                // Clear unticks every value, even ones hidden by the search
+    const setFilter = (v) => { S.F.cf[c.k] = v; drawHead(); loadView(true); };
+    done();
+    if (a === "close") return;
+    if (a === "asc") { S.F.sort = c.k; loadView(true); }
+    else if (a === "desc") { S.F.sort = "-" + c.k; loadView(true); }
+    else if (a === "nosort") { S.F.sort = ""; loadView(true); }
+    else if (a === "sortcolor") { S.F.sort = "color:" + b.dataset.k; loadView(true); }
+    else if (a === "colorapply") { S.F.color = [...m.querySelectorAll("input[data-color]:checked")].map((i) => i.dataset.color).join(","); loadView(true); }
+    else if (a === "colorclear") { S.F.color = ""; loadView(true); }
+    else if (a === "condapply") setFilter(condString(m.querySelector('select[name="op"]').value, m.querySelector('input[name="a"]').value, m.querySelector('input[name="b"]').value, kind));
+    else if (a === "condclear") setFilter("");
+    else if (a === "valok") {
+      const ticked = values.filter((v) => on.has(v.v)).map((v) => v.v), unticked = values.filter((v) => !on.has(v.v)).map((v) => v.v);
+      setFilter(on.size === values.length ? "" : on.size * 2 > values.length ? "notin:" + JSON.stringify(unticked) : "in:" + JSON.stringify(ticked));
+    }
+    else if (a === "hide") hideColumns([c.k]);
+    else if (a === "insert") addColumnDialog(c.k);
+    else if (a === "protect") protectDialog(c);
+    else if (a === "dropdown") dropdownDialog(c);
+    else if (a === "delete") deleteColumn(c);
   });
 }
+const openHeaderMenu = (ci, x, y) => openColumnMenu(visCols()[ci], x, y, false);
 
 function filterParams() {
   const p = { q: S.F.q, queue: S.F.queue, sort: S.F.sort };
+  if (S.F.color) p.color = S.F.color;
   for (const [k, v] of Object.entries(S.F.cf)) if (v) p["cf_" + k] = v;
   return p;
 }
@@ -256,8 +420,8 @@ export async function mount(host, hashParams, c) {
   const hidden = (() => { try { return new Set(JSON.parse(store.get("gt_hidden_cols", "[]"))); } catch { return new Set(); } })();
   const widths = (() => { try { return JSON.parse(store.get("gt_col_w", "{}")); } catch { return {}; } })();
   S = { ids: [], cache: new Map(), sel: null, dim: new Set(), undo: [], redo: [], hidden, widths, views: [], taken: "", busy: false,
-        F: { q: hashParams.get("q") || "", queue: hashParams.get("queue") || "", sort: hashParams.get("sort") || "", cf: {} },
-        edit: null, drag: false, focused: false, fetching: new Set(), drafts: [], draftMap: new Map(), draftSeq: 0, draftAlias: new Map(), work: null, touched: new Set(), saving: false, resave: false, fill: null, multi: [], add: false, copied: null };
+        F: { q: hashParams.get("q") || "", queue: hashParams.get("queue") || "", sort: hashParams.get("sort") || "", color: hashParams.get("color") || "", cf: {} },
+        edit: null, drag: false, focused: false, fetching: new Set(), drafts: [], draftMap: new Map(), draftSeq: 0, draftAlias: new Map(), work: null, touched: new Set(), colors: store.get("gt_rowcolors", "1") !== "0", saving: false, resave: false, fill: null, multi: [], add: false, copied: null };
   for (const [k, v] of hashParams) if (k.startsWith("cf_")) S.F.cf[k.slice(3)] = v;  S.views = (await api("/api/views")).items;
   await ctx.refreshMeta();
   try { for (const d of JSON.parse(store.get("gt_drafts", "[]"))) newDraft(d); } catch { /* nothing saved */ }       // unsaved new rows survive a reload
@@ -277,12 +441,14 @@ function skeleton() {
     <div class="toolbar sheetbar">
       <input class="grow" type="search" id="q" placeholder="Search SKU, ASIN, UPC, name…  ( / )" value="${esc(S.F.q)}" aria-label="Search" style="max-width:340px">
       <select id="fQueue" aria-label="Queue">${queueOpts}</select>
+      <button class="btn small primary" id="colorFilterBtn" title="A colour filter is on (set it from a column's ▾ menu). Click to change or clear it." hidden>🎨 Colour</button>
       <span class="sep"></span>
       <button class="btn small" id="clearFilters" title="Turn off every filter at once: the column filters, the search box and the queue" hidden>✕ Clear filters</button>
       <button class="btn small primary" id="startWork" title="Freeze the rows in this view and save them as a work list, so nothing is lost if the page reloads or the power goes out" hidden>📋 Work list</button>
       <button class="btn small" id="undo" title="Undo (Ctrl+Z)">↶ Undo</button><button class="btn small" id="redo" title="Redo (Ctrl+Y)">↷ Redo</button>
       <span class="menuwrap"><button class="btn small" id="actionsBtn">Actions ▾</button><div class="menu hidden" id="actionsMenu"></div></span>
       <button class="btn small" id="colsBtn">Columns</button>
+      <button class="btn small" id="colorsBtn" title="What the row colours mean, and turn them off">🎨 Row colours</button>
       ${ctx.isAdmin() ? `<button class="btn small" id="addColBtn" title="Add a column of your own">+ Column</button>` : ""}
       <button class="btn small" id="exportBtn">Export view</button>
       <span class="sep"></span>
@@ -313,54 +479,20 @@ function skeleton() {
 const fitHeight = () => { const top = el.scroller.getBoundingClientRect().top; el.scroller.style.height = Math.max(320, innerHeight - top - 46) + "px"; };
 
 function drawHead() {
-  // The header is rebuilt after every filter change; keep the cursor in the filter box being typed in.
-  const ae = document.activeElement;
-  const keep = ae && el.head.contains(ae) && ae.dataset?.cf ? { k: ae.dataset.cf, a: ae.selectionStart, b: ae.selectionEnd } : null;
-  drawHeadHtml();
-  if (keep) {
-    const inp = el.head.querySelector(`input[data-cf="${keep.k}"]`);
-    if (inp) { inp.focus(); try { inp.setSelectionRange(keep.a, keep.b); } catch { /* not a text box */ } }
-  }
-}
-
-function drawHeadHtml() {
   const cols = visCols(), xs = colX();
   const sortKey = S.F.sort.replace("-", ""), desc = S.F.sort.startsWith("-");
   el.head.style.width = totalW() + "px";
-  const filterCell = (c) => {
-    if (NO_FILTER.has(c.k)) return "";
-    const v = S.F.cf[c.k] || "";
-    const picked = pickedOf(v);
-    if (c.t === "status" || c.t === "bool") {      // tick the values to show, like a Google Sheets filter view
-      const label = picked ? pickLabel(picked) : v || "all";
-      return `<button type="button" class="fpick wide ${v ? "on" : ""}" data-pick="${c.k}" title="Choose which values to show">${esc(label)} ▾</button>`;
-    }
-    if (pickable(c) && c.t === "text") {
-      const ph = picked ? pickLabel(picked) : "contains…";
-      return `<div class="fwrap"><input data-cf="${c.k}" value="${picked ? "" : esc(v)}" placeholder="${ph}" class="${picked ? "on" : ""}" aria-label="Filter ${esc(c.l)}">
-        <button type="button" class="fpick ${picked ? "on" : ""}" data-pick="${c.k}" title="Choose which values to show" aria-label="Pick values for ${esc(c.l)}">▾</button></div>`;
-    }
-    if (c.t === "amzimg") return `<select data-cf="${c.k}"><option value="">all</option><option value="TRUE" ${v === "TRUE" ? "selected" : ""}>has image</option><option value="FALSE" ${v === "FALSE" ? "selected" : ""}>no image</option></select>`;
-    if (c.t === "img") return `<select data-cf="${c.k}"><option value="">all</option><option value="TRUE" ${v === "TRUE" ? "selected" : ""}>has images</option><option value="FALSE" ${v === "FALSE" ? "selected" : ""}>no images</option></select>`;
-    if (c.t === "bool") return `<select data-cf="${c.k}"><option value="">all</option><option ${v === "TRUE" ? "selected" : ""}>TRUE</option><option ${v === "FALSE" ? "selected" : ""}>FALSE</option></select>`;
-    if (c.t === "status") return `<select data-cf="${c.k}"><option value="">all</option>${Object.keys(STATUS).map((s) => `<option ${v === s ? "selected" : ""}>${s}</option>`).join("")}</select>`;
-    const ph = c.t === "money" || c.t === "num" ? ">10 or 5-9" : "contains…";
-    return `<input data-cf="${c.k}" value="${esc(v)}" placeholder="${ph}" aria-label="Filter ${esc(c.l)}">`;
-  };
   el.head.innerHTML = `<div class="hrow" style="height:${HEAD_H}px"><div class="hc rn" data-corner="1" style="width:${NUM_W}px" title="Select everything">◢</div>
     ${cols.map((c, i) => `<div class="hc ${c.pin ? "pin" : ""}" data-hc="${i}" style="width:${colW(c)}px;${pinStyle(i)}"><span class="hl" title="${esc(lockOf(c.k) ? lockTip(c.k) : c.tip || c.l)}">${lockOf(c.k) ? "🔒 " : ""}${esc(c.l)}</span>
       ${SORTABLE.has(c.k) || c.custom ? `<button class="sb ${sortKey === c.k ? "on" : ""}" data-sort="${c.k}" title="Sort" aria-label="Sort by ${esc(c.l)}">${sortKey === c.k ? (desc ? "↓" : "↑") : "⇅"}</button>` : ""}
-      <button class="sb" data-hm="${i}" title="Column menu (or right-click)" aria-label="Menu for ${esc(c.l)}">▾</button>
-      <i class="rz" data-rz="${i}"></i></div>`).join("")}</div>
-    <div class="hrow frow" style="height:${FILT_H}px"><div class="hc rn" style="width:${NUM_W}px"></div>
-    ${cols.map((c, i) => `<div class="hc fc ${c.pin ? "pin" : ""}" style="width:${colW(c)}px;${pinStyle(i)}">${filterCell(c)}</div>`).join("")}</div>`;
+      <button class="sb ${S.F.cf[c.k] ? "on" : ""}" data-hm="${i}" title="${S.F.cf[c.k] ? "This column is filtered. " : ""}Sort and filter (or right-click the header)" aria-label="Sort and filter ${esc(c.l)}">▾</button>
+      <i class="rz" data-rz="${i}"></i></div>`).join("")}</div>`;
 }
 
 // ------------------------------------------------------------------ data
 async function loadView(resetScroll) {
   if (S.work) {                                          // working through a saved list: a refresh keeps its rows, a new filter leaves it (it stays saved)
-    if (!resetScroll) return refreshWork();
-    leaveWork(true);
+    return resetScroll ? applyWorkIds(true) : refreshWork();
   }
   S.busy = true;
   statusLine("Loading…");
@@ -389,7 +521,7 @@ async function loadView(resetScroll) {
 async function exportView() {                           // POST, so a long filter can't break the request
   statusLine("Preparing the export…");
   try {
-    const r = await fetch("/api/products/export.csv", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(filterParams()) });
+    const r = await fetch("/api/products/export.csv", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(viewFilter()) });
     if (r.status === 401) { location.href = "/login"; return; }
     if (!r.ok) throw new Error(`Export failed (${r.status}).`);
     const blob = await r.blob();
@@ -407,7 +539,8 @@ async function exportView() {                           // POST, so a long filte
 function drawClearButton() {
   const b = $("#clearFilters");
   if (!b) return;
-  const n = Object.values(S.F.cf).filter((v) => String(v || "").trim()).length + (S.F.q.trim() ? 1 : 0) + (S.F.queue ? 1 : 0);
+  drawColorBtn();
+  const n = Object.values(S.F.cf).filter((v) => String(v || "").trim()).length + (S.F.q.trim() ? 1 : 0) + (S.F.queue ? 1 : 0) + (S.F.color ? 1 : 0);
   b.hidden = !n;
   b.textContent = `✕ Clear filters (${n})`;
   const w = $("#startWork");                             // a work list starts from a filtered view (an issue queue, a column filter …)
@@ -417,6 +550,7 @@ function clearAllFilters() {
   S.F.cf = {};
   S.F.q = "";
   S.F.queue = "";
+  S.F.color = "";
   if ($("#q")) $("#q").value = "";
   if ($("#fQueue")) $("#fQueue").value = "";
   if (location.hash.includes("?")) history.replaceState(null, "", "#catalog");      // a reload must not bring the filters from the link back
@@ -457,12 +591,13 @@ function render() {
     const row = rowAt(i);
     const rowSel = rs.some((x) => i >= x.r1 && i <= x.r2 && x.c1 === 0 && x.c2 === cols.length - 1);
     const draft = !!row?._draft;
-    html += `<div class="gr ${S.dim.has(S.ids[i]) ? "gone" : ""} ${S.touched.has(S.ids[i]) ? "touched" : ""} ${row && !draft && !row.inventory && (S.dim.has(S.ids[i]) || S.touched.has(S.ids[i])) ? "invoff" : ""} ${draft ? "draft" : ""} ${row?._err ? "bad" : ""}" style="top:${i * RH}px;width:${totalW()}px">
+    const rule = S.colors && row && !draft ? rowRule(row) : null;
+    html += `<div class="gr ${rule ? "rc-" + rule.k : ""} ${S.dim.has(S.ids[i]) ? "gone" : ""} ${S.touched.has(S.ids[i]) ? "touched" : ""} ${row && !draft && !row.inventory && (S.dim.has(S.ids[i]) || S.touched.has(S.ids[i])) ? "invoff" : ""} ${draft ? "draft" : ""} ${row?._err ? "bad" : ""}" style="top:${i * RH}px;width:${totalW()}px">
       <div class="gc rn ${rowSel ? "s" : ""}" data-r="${i}" data-c="-1" style="width:${NUM_W}px" title="${draft ? esc(row._err || "A new row: fill it in, then press Save new rows") : "Click to select row · double-click for details"}">${draft ? (draftBlank(row) ? "＋" : "new") : i + 1}</div>`;
     cols.forEach((c, ci) => {
       const inSel = inRects(rs, i, ci);
       const isAct = act && act.r === i && act.c === ci;
-      const cls = `gc ${c.r || c.t === "num" || c.t === "money" || c.t === "pct" ? "r" : ""} ${c.t === "bool" ? "ctr" : ""} ${c.pin ? "pin" : ""} ${c.calc ? "calc" : ""} ${blockedMsg(c.k) ? "ro locked" : ""} ${row?._ovr?.includes(c.k) ? "ov" : ""} ${inSel ? "s" : ""} ${isAct ? "a" : ""} ${cpy ? copyEdges(cpy, i, ci) : ""}`;
+      const cls = `gc ${c.r || c.t === "num" || c.t === "money" || c.t === "pct" ? "r" : ""} ${c.t === "bool" ? "ctr" : ""} ${c.pin ? "pin" : ""} ${c.calc ? "calc" : ""} ${blockedMsg(c.k) ? "ro locked" : ""} ${row?._ovr?.includes(c.k) ? "ov" : ""} ${rule && ROW_COLOR_COLS.has(c.k) ? "rcc" : ""} ${S.colors && row && !draft ? cellFlag(row, c) : ""} ${inSel ? "s" : ""} ${isAct ? "a" : ""} ${cpy ? copyEdges(cpy, i, ci) : ""}`;
       let inner = "";
       if (row) {
         if (c.t === "amzimg") inner = row.amazon_image
@@ -500,7 +635,7 @@ function drawFbar() {
 
 function statusLine(msg) {
   const sel = normSel();
-  const left = msg || `${fmt(S.ids.length - S.drafts.length)} rows${S.dim.size ? (S.work ? ` · ${fmt(S.dim.size)} resolved (they stay in your work list)` : ` · ${fmt(S.dim.size)} no longer match the filter (click Refresh view to drop them)`) : ""}`;
+  const left = msg || `${fmt(S.ids.length - S.drafts.length)} rows${S.work && narrowed() ? ` of ${fmt(S.work.total)} in the work list (the filters only hide rows; clear them to see all)` : ""}${S.dim.size ? (S.work ? ` · ${fmt(S.dim.size)} resolved (they stay in your work list)` : ` · ${fmt(S.dim.size)} no longer match the filter (click Refresh view to drop them)`) : ""}`;
   el.stL.textContent = left;
   let right = "";
   if (sel) {
@@ -717,33 +852,50 @@ async function discardDrafts() {
 const workKey = () => "gt_work_" + (ctx.meta?.me?.username || "");
 let pendingWork = [];                                   // my unfinished lists on the server (offered after a reload)
 
-function applyWorkIds() {                               // the grid shows the frozen rows (or only the ones still open)
-  const w = S.work, base = w.openOnly ? w.skus.filter((s) => !S.dim.has(s)) : w.skus;
+// Inside a work list the filters and the sort only narrow what is shown: the rows frozen when the list started stay saved,
+// and clearing the filters brings every one of them back.
+const narrowed = () => !!(S.F.q.trim() || S.F.queue || S.F.sort || S.F.color || Object.values(S.F.cf).some(Boolean));
+const viewFilter = () => (S.work ? S.work.params : filterParams());     // what "still matches" means for the rows being edited
+
+async function applyWorkIds(toTop = false) {            // the grid shows the frozen rows (narrowed by the filters, or only the ones still open)
+  const w = S.work;
+  let base = w.skus;
+  if (narrowed()) {
+    try {
+      const inList = new Set(w.skus);
+      base = (await api("/api/sheet/skus", filterParams())).skus.filter((s) => inList.has(s));
+    } catch (e) { toast(e.message, "bad"); }
+  }
+  if (S.work !== w) return;                              // the list was closed while the filter was being read
+  if (w.openOnly) base = base.filter((s) => !S.dim.has(s));
   S.ids = base.concat(S.drafts.map((d) => d.sku));
   el.body.style.height = S.ids.length * RH + "px";
   S.sel = null;
+  if (toTop) el.scroller.scrollTop = 0;
   render();
   drawWorkBar();
+  drawClearButton();
+}
+
+function clearExtraFilters() {
+  S.F = { q: "", queue: "", sort: "", color: "", cf: {} };
+  if ($("#q")) $("#q").value = "";
+  if ($("#fQueue")) $("#fQueue").value = "";
 }
 
 async function enterWork(id, openOnly = false) {
   const w = await api("/api/work/" + id);
-  S.work = { id: w.id, name: w.name, skus: w.skus, total: w.total, openOnly };
-  S.F = { q: w.params.q || "", queue: w.params.queue || "", sort: w.params.sort || "", cf: {} };
-  for (const [k, v] of Object.entries(w.params)) if (k.startsWith("cf_")) S.F.cf[k.slice(3)] = v;
-  if ($("#q")) $("#q").value = S.F.q;
-  if ($("#fQueue")) $("#fQueue").value = S.F.queue;
+  S.work = { id: w.id, name: w.name, skus: w.skus, total: w.total, openOnly, params: w.params };
+  clearExtraFilters();
   S.dim = new Set(w.resolved);
   S.touched = new Set(w.edited);
   S.cache.clear();
   store.set(workKey(), String(w.id));
   drawHead();
-  el.scroller.scrollTop = 0;
-  applyWorkIds();
-  drawClearButton();
+  await applyWorkIds(true);
 }
 
-async function refreshWork() {                          // re-read what is edited / resolved from the server (rows stay where they are)
+async function refreshWork() {                          // Refresh view: re-read what is edited / resolved from the server (rows stay where they are)
   if (!S.work) return;
   try {
     const w = await api("/api/work/" + S.work.id);
@@ -753,11 +905,14 @@ async function refreshWork() {                          // re-read what is edite
     applyWorkIds();
   } catch (e) { toast(e.message, "bad"); }
 }
-const refreshWorkSoon = debounce(() => S.work && refreshWork(), 1500);
 
 function leaveWork(announce) {                          // go back to the normal view; the list stays saved on the server
   if (!S.work) return;
-  const name = S.work.name;
+  const name = S.work.name, p = S.work.params || {};
+  S.F = { q: p.q || "", queue: p.queue || "", sort: p.sort || "", color: p.color || "", cf: {} };           // the normal view goes back to what the list was started from
+  for (const [k, v] of Object.entries(p)) if (k.startsWith("cf_")) S.F.cf[k.slice(3)] = v;
+  if ($("#q")) $("#q").value = S.F.q;
+  if ($("#fQueue")) $("#fQueue").value = S.F.queue;
   S.work = null;
   S.touched.clear();
   S.dim.clear();
@@ -826,7 +981,8 @@ function drawWorkBar() {
   if (S.work) {
     const w = S.work, resolved = Math.min(S.dim.size, w.total), open = w.total - resolved;
     bar.classList.remove("hidden");
-    bar.innerHTML = `📋 <b>${esc(w.name)}</b> · ${fmt(w.total)} rows · <b>${fmt(S.touched.size)}</b> edited · <b>${fmt(resolved)}</b> resolved · <b>${fmt(open)}</b> still open
+    const from = w.params?.queue ? ` (started from ${esc(ctx.meta.queues[w.params.queue]?.label || w.params.queue)})` : "";
+    bar.innerHTML = `📋 <b>${esc(w.name)}</b>${from} · ${fmt(w.total)} rows · <b>${fmt(S.touched.size)}</b> edited · <b>${fmt(resolved)}</b> resolved · <b>${fmt(open)}</b> still open
       <span class="grow"></span><button class="btn small" data-work="toggle">${w.openOnly ? "Show all rows" : "Show open rows only"}</button>
       <button class="btn small primary" data-work="finish" title="Confirm that this issue has been resolved">✔ Finish &amp; confirm</button>
       <button class="btn small" data-work="leave" title="Close the view but keep the list saved to continue later">Leave (keep saved)</button>
@@ -1126,7 +1282,7 @@ async function doEdits(edits, opts = {}) {
   statusLine(`Saving ${fmt(edits.length)} cell${edits.length === 1 ? "" : "s"}…`);
   let res;
   try {
-    res = await api("/api/sheet/cells", { edits, filter: filterParams(), action: opts.action });
+    res = await api("/api/sheet/cells", { edits, filter: viewFilter(), action: opts.action });
   } catch (e) { toast(e.message, "bad"); statusLine(); return null; }
   absorb(res);
   if (res.changed && opts.undo !== false) {
@@ -1156,11 +1312,11 @@ function absorb(res) {
   const sent = new Set(res.rows.map((r) => r.sku));
   res.rows.forEach((row) => S.cache.set(row.sku, row));
   res.updated_skus.forEach((s) => { if (!sent.has(s)) S.cache.delete(s); });   // re-read when scrolled into view
-  res.left_view.forEach((s) => S.dim.add(s));
-  if (S.work) {                                          // rows edited during a work list are marked, and the saved counts are re-read shortly
+  const left = new Set(res.left_view);                   // the answer already says which rows stopped (or started again) matching: nothing is re-read
+  res.updated_skus.forEach((s) => { if (left.has(s)) S.dim.add(s); else S.dim.delete(s); });
+  if (S.work) {                                          // rows edited during a work list are marked in place
     res.updated_skus.forEach((s) => S.touched.add(s));
     drawWorkBar();
-    refreshWorkSoon();
   }
 }
 
@@ -1341,7 +1497,7 @@ async function runAction(act) {
   if (act === "amazon") {
     if (!(await confirmBox("Use the Amazon price as source price?", `For ${sc.label}, SOURCE PRICE becomes the SCRAP PRICE (rows with no scraped price are skipped). The rows stay in your view, and you can undo with Ctrl+Z.`, "Update source price"))) return;
     statusLine("Updating…");
-    const res = await api("/api/sheet/use-amazon-price", { skus: sc.skus, filter: filterParams() }).catch((e) => { toast(e.message, "bad"); return null; });
+    const res = await api("/api/sheet/use-amazon-price", { skus: sc.skus, filter: viewFilter() }).catch((e) => { toast(e.message, "bad"); return null; });
     if (!res) return statusLine();
     absorb(res);
     if (res.changed) { S.undo.push({ before: res.before, after: res.after, label: "amazon" }); S.redo = []; }
@@ -1380,7 +1536,6 @@ async function runAction(act) {
   }
   if (!(await confirmBox(`Apply to ${fmt(sc.skus.length)} products?`, `${label}. You can undo with Ctrl+Z.`, "Apply"))) return;
   await doEdits(sc.skus.map((sku) => ({ sku, field, value })), { label, action: "bulk edited in the sheet" });
-  S.cache.clear(); render();
 }
 
 // ------------------------------------------------------------------ events
@@ -1499,17 +1654,6 @@ function wire() {
     e.preventDefault();
     openHeaderMenu(+hc.dataset.hc, e.clientX, e.clientY);
   });
-  const applyFilters = debounce(() => loadView(true), 350);
-  el.head.addEventListener("input", (e) => {
-    const k = e.target.dataset.cf;
-    if (!k) return;
-    S.F.cf[k] = e.target.value;
-    applyFilters();
-  });
-  el.head.addEventListener("click", (e) => {
-    const b = e.target.closest("[data-pick]");
-    if (b) openPicker(visCols().find((c) => c.k === b.dataset.pick), b);
-  });
   el.head.addEventListener("mousedown", (e) => {          // drag a column edge to resize
     const rz = e.target.closest("[data-rz]");
     if (!rz) return;
@@ -1576,12 +1720,14 @@ function wire() {
     const a = t.closest("[data-act]");
     if (a) return runAction(a.dataset.act);
     if (t.closest("#colsBtn")) return columnsDialog();
+    if (t.closest("#colorsBtn")) return colorsDialog();
+    if (t.closest("#colorFilterBtn")) return colorFilterDialog();
     if (t.closest("#addColBtn")) return addColumnDialog(S.sel ? visCols()[S.sel.c2]?.k : null);
     if (t.closest("#exportBtn")) return exportView();
     const vb = t.closest("[data-view]");
     if (vb) {
       const v = S.views.find((x) => x.id == vb.dataset.view);
-      S.F = { q: v.params.q || "", queue: v.params.queue || "", sort: v.params.sort || "", cf: {} };
+      S.F = { q: v.params.q || "", queue: v.params.queue || "", sort: v.params.sort || "", color: v.params.color || "", cf: {} };
       for (const [k, val] of Object.entries(v.params)) if (k.startsWith("cf_")) S.F.cf[k.slice(3)] = val;
       skeleton();
       return loadView(true);
@@ -1598,8 +1744,47 @@ function wire() {
       }
     }
   };
-  root.onchange = (e) => { if (e.target.id === "fQueue") { S.F.queue = e.target.value; loadView(true); } else if (e.target.dataset.cf !== undefined) { S.F.cf[e.target.dataset.cf] = e.target.value; loadView(true); } };
+  root.onchange = (e) => { if (e.target.id === "fQueue") { S.F.queue = e.target.value; loadView(true); } };
   root.oninput = debounce((e) => { if (e.target.id === "q") { S.F.q = e.target.value; loadView(true); } }, 300);
+}
+
+// Filter by colour (like Google Sheets' "Filter by color"): tick the colours to keep. The server applies the same rules as the grid paints.
+const CELL_FILTERS = [["cell_qty", "Red cell: marketplace inventory disagrees with Inventory", "#ff0000"],
+  ["cell_price", "Red cell: marketplace price differs from the automation price", "#ff0000"],
+  ["box_sold", "Wine-ringed Inventory box: the product has sold", "#9b1c3a"],
+  ["text_prime", "Red text: Prime delivery", "#ffffff"]];
+function drawColorBtn() {
+  const b = $("#colorFilterBtn");
+  if (!b) return;
+  const n = S.F.color ? S.F.color.split(",").length : 0;
+  b.textContent = `🎨 Colour (${n})`;
+  b.hidden = n === 0;                                      // shown only while a colour filter is on: the filter itself is set from a column's ▾ menu
+}
+
+async function colorFilterDialog() {
+  const on = new Set(S.F.color ? S.F.color.split(",") : []);
+  const box = (k, label, c, bold = false) => `<label class="check" style="display:flex;gap:8px;align-items:center;padding:3px 0"><input type="checkbox" name="c" value="${k}" ${on.has(k) ? "checked" : ""}>
+    <span class="rc-swatch" style="background:${c}"></span><span>${bold ? `<b>${esc(label)}</b>` : esc(label)}</span></label>`;
+  const r = await dialog({ title: "Filter by colour", body: `<p class="muted">Tick the colours to keep: rows or cells of any ticked colour are shown. The colours are the same ones the grid paints, whether or not you show them.</p>
+    <b>Row colour</b>${ROW_RULES.map((x) => box(x.k, `${x.label} (${x.when.toLowerCase()})`, x.c)).join("")}${box("none", "No colour", "transparent")}
+    <b style="display:block;margin-top:8px">Single cells</b>${CELL_FILTERS.map(([k, l, c]) => box(k, l, c)).join("")}`,
+    actions: [["Cancel", "close"], ["Clear colour filter", "clear"], ["Apply", "ok", "primary"]] });
+  if (r.value !== "ok" && r.value !== "clear") return;
+  S.F.color = r.value === "clear" ? "" : [...r.el.querySelectorAll('input[name="c"]:checked')].map((x) => x.value).join(",");
+  loadView(true);
+}
+
+async function colorsDialog() {
+  const r = await dialog({ title: "Row colours", body: `<p class="muted">The same colours as the Google Sheet. A row is coloured from its SOURCE STATUS and the Inventory tick. Only you see this setting.</p>
+    <label class="check" style="display:flex;gap:8px;margin:8px 0"><input type="checkbox" name="on" ${S.colors ? "checked" : ""}> Show row colours</label>
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center">${ROW_RULES.map((x) => `<span class="rc-swatch" style="background:${x.c}"></span><span><b>${esc(x.label)}</b> <span class="muted">${esc(x.when)}</span></span>`).join("")}
+      <span class="rc-swatch" style="background:#fff;box-shadow:inset 0 0 0 3px #9b1c3a"></span><span><b>Inventory box with a wine ring</b> <span class="muted">the product has sold at least once (so think twice before switching it off)</span></span>
+      <span class="rc-swatch" style="background:#ff0000"></span><span><b>Marketplace inventory or price</b> <span class="muted">cell turns red when it disagrees with Inventory or the automation price</span></span></div>`,
+    actions: [["Cancel", "close"], ["Save", "ok", "primary"]] });
+  if (r.value !== "ok") return;
+  S.colors = !!r.el.querySelector('input[name="on"]').checked;
+  store.set("gt_rowcolors", S.colors ? "1" : "0");
+  render();
 }
 
 async function onRowChanged(sku) {
@@ -1617,41 +1802,6 @@ async function reloadColumns(keepFilters = true) {
   rebuildCols();
   S.sel = null;
   await loadView(!keepFilters);
-}
-
-function openHeaderMenu(ci, x, y) {
-  document.querySelector(".hmenu")?.remove();
-  const c = visCols()[ci];
-  const admin = ctx.isAdmin();
-  const m = document.createElement("div");
-  m.className = "menu hmenu";
-  m.style.cssText = `position:fixed;left:${Math.min(x, innerWidth - 270)}px;top:${Math.min(y + 4, innerHeight - 280)}px`;
-  m.innerHTML = `<div class="mhead">${esc(c.l)}</div>
-    <button data-hma="asc">Sort A → Z</button><button data-hma="desc">Sort Z → A</button><button data-hma="nosort">Clear sort</button><hr>
-    ${c.t === "img" || c.t === "amzimg" ? "" : `<button data-hma="protect" ${admin ? "" : "disabled"}>🔒 ${lockOf(c.k) ? "Change protection…" : "Protect this column…"}${admin ? "" : " (admins only)"}</button>
-      ${lockOf(c.k) && !admin ? `<div class="mhead">${esc(lockTip(c.k))}</div>` : ""}<hr>`}
-    ${c.t === "text" && !c.calc && !NO_DROPDOWN.has(c.k) ? `<button data-hma="dropdown" ${admin ? "" : "disabled"}>▾ ${dropdownOf(c) ? "Edit the dropdown values…" : "Make this a dropdown…"}${admin ? "" : " (admin)"}</button>` : ""}
-    <button data-hma="insert" ${admin ? "" : "disabled"}>Insert a column to the right…${admin ? "" : " (admin)"}</button>
-    ${c.pin ? "" : `<button data-hma="hide">${c.custom ? "Hide this column" : "Remove from view (hide)"}</button>`}
-    ${c.custom ? `<button data-hma="delete" class="danger" ${admin ? "" : "disabled"}>Delete this column and its values…${admin ? "" : " (admin)"}</button>`
-               : `<div class="mhead">A built-in column can't be deleted (pricing and statuses depend on it). Removing it only hides it, and <b>Columns</b> brings it back.</div>`}`;
-  document.body.append(m);
-  const close = (ev) => { if (!m.contains(ev.target) || ev.type === "keydown") { m.remove(); document.removeEventListener("mousedown", close, true); document.removeEventListener("keydown", close, true); } };
-  setTimeout(() => { document.addEventListener("mousedown", close, true); document.addEventListener("keydown", close, true); }, 0);
-  m.addEventListener("click", async (e) => {
-    const b = e.target.closest("[data-hma]");
-    if (!b || b.disabled) return;
-    m.remove();
-    const a = b.dataset.hma;
-    if (a === "asc") { S.F.sort = c.k; loadView(true); }
-    else if (a === "desc") { S.F.sort = "-" + c.k; loadView(true); }
-    else if (a === "nosort") { S.F.sort = ""; loadView(true); }
-    else if (a === "hide") hideColumns([c.k]);
-    else if (a === "insert") addColumnDialog(c.k);
-    else if (a === "protect") protectDialog(c);
-    else if (a === "dropdown") dropdownDialog(c);
-    else if (a === "delete") deleteColumn(c);
-  });
 }
 
 // Turn a text column into a fixed dropdown (people pick a value instead of typing), edit its values, or turn it off (admins only).

@@ -112,7 +112,22 @@ CF_NUM = {"weight": "weight", "source_price": "source_price", "fee": "fee", "aut
           "michaels_price": "michaels_price", "michaels_qty": "michaels_qty",
           "sold_total": "(COALESCE(sold_2025,0)+COALESCE(sold_2026,0))", "cost": "(source_price+fee)"}
 _NUM = r"\$?\s*(-?\d+(?:\.\d+)?)"
-NUM_OP = re.compile(rf"^\s*(>=|<=|>|<|=)?\s*{_NUM}\s*$")
+NUM_OP = re.compile(rf"^\s*(>=|<=|!=|>|<|=)?\s*{_NUM}\s*$")
+TEXT_OP = re.compile(r"^(nc|sw|ew|eq):(.*)$", re.S)       # "Filter by condition" on text: does not contain / starts with / ends with / is exactly
+
+
+def _text_condition(col: str, v: str, where: list, binds: dict, n: int) -> bool:
+    m = TEXT_OP.match(v)
+    if not m:
+        return False
+    op, val = m.groups()
+    if op == "eq":
+        where.append(f"LOWER(COALESCE({col},''))=LOWER(:cf{n})")
+        binds[f"cf{n}"] = val
+    else:
+        where.append(f"COALESCE({col},'') {'NOT LIKE' if op == 'nc' else 'LIKE'} :cf{n}")
+        binds[f"cf{n}"] = {"nc": f"%{val}%", "sw": f"{val}%", "ew": f"%{val}"}[op]
+    return True
 NUM_RANGE = re.compile(rf"^\s*{_NUM}\s*(?:\.\.|to|-)\s*{_NUM}\s*$", re.I)
 
 
@@ -123,6 +138,9 @@ def custom_types() -> dict[str, str]:
 
 def sort_expr(key: str) -> str | None:
     key = key.lstrip("-")
+    if key.startswith("color:"):                         # "Sort by color": rows of that colour first (a leading - puts them last)
+        cond = color_condition(key[6:])
+        return f"CASE WHEN {cond} THEN 0 ELSE 1 END" if cond else None
     if key in custom_types():
         return f"json_extract(extra, '$.{key}')"
     return SORTS.get(key)
@@ -222,6 +240,8 @@ def _column_filters(q: dict, where: list, binds: dict) -> None:
                 where.append(f"COALESCE({col},'')=''")
             elif v == "(not blank)":
                 where.append(f"COALESCE({col},'')<>''")
+            elif cust[key] != "number" and _text_condition(col, v, where, binds, n):
+                pass
             elif cust[key] == "number":
                 if (m := NUM_RANGE.match(v)):
                     where.append(f"{col} BETWEEN :cf{n}a AND :cf{n}b")
@@ -240,6 +260,8 @@ def _column_filters(q: dict, where: list, binds: dict) -> None:
                 where.append(f"COALESCE({col},'')=''")
             elif v == "(not blank)":
                 where.append(f"COALESCE({col},'')<>''")
+            elif _text_condition(col, v, where, binds, n):
+                pass
             else:
                 where.append(f"{col} LIKE :cf{n}")
                 binds[f"cf{n}"] = f"%{v}%"
@@ -260,6 +282,46 @@ def _column_filters(q: dict, where: list, binds: dict) -> None:
                 binds[f"cf{n}"] = float(m.group(2))
             else:
                 where.append("0")      # not understood: show nothing rather than everything
+
+
+# Colour filter (?color=oos,hp,cell_qty): the grid's colours as SQL, so every row of a colour can be found. These mirror
+# ROW_RULES / cellFlag in web/static/js/v-catalog.js, which paint the same rules the Google Sheet's conditional formatting had.
+_ON = "COALESCE(inventory,0)=1"
+_ST = "COALESCE(status,'')"
+ROW_COLORS = [                    # in the order the sheet tries them: the first one that fits colours the row
+    ("oos", f"{_ST}='Out of Stock' AND {_ON}"), ("tf", f"{_ST}='TimeFrame' AND {_ON}"),
+    ("chk", f"{_ST}='Check Inventory' AND NOT {_ON}"), ("hp", f"{_ST}='High Price' AND {_ON}"),
+    ("li", f"{_ST}='Low Inventory' AND {_ON}"), ("lp", f"{_ST}='Low Price' AND {_ON}"), ("mc", f"{_ST}='Manual Check' AND {_ON}"),
+    ("oosdi", f"{_ST}='OOS Different Item' AND {_ON}"), ("oosv", f"{_ST}='OOS Variation' AND {_ON}"),
+    ("mzoff", f"COALESCE(michaels_qty,0)>0 AND NOT {_ON}"), ("mzzero", f"{_ON} AND COALESCE(michaels_qty,0)=0"),
+]
+CELL_COLORS = {
+    "cell_qty": f"(COALESCE(michaels_qty,0)>0 AND NOT {_ON}) OR (michaels_qty IS NOT NULL AND michaels_qty=0 AND {_ON})",
+    "cell_price": "michaels_price IS NOT NULL AND (auto_price IS NULL OR ABS(michaels_price-auto_price)>=0.005)",
+    "box_sold": ("COALESCE(CASE WHEN COALESCE(ovr,'')<>'' THEN json_extract(ovr,'$.sold_total') END, "
+                 "COALESCE(sold_2025,0)+COALESCE(sold_2026,0))>=1"),
+    "text_prime": "COALESCE(delivery,'') LIKE '%prime%'",
+}
+
+
+def color_condition(k: str) -> str | None:
+    """The SQL that is true for the rows (or cells) of one colour, None for a colour that doesn't exist."""
+    if k == "none":
+        return "NOT (" + " OR ".join(f"({s})" for _, s in ROW_COLORS) + ")"
+    if k in CELL_COLORS:
+        return f"({CELL_COLORS[k]})"
+    names = [n for n, _ in ROW_COLORS]
+    if k in names:
+        i = names.index(k)
+        return f"(({ROW_COLORS[i][1]})" + "".join(f" AND NOT ({s})" for _, s in ROW_COLORS[:i]) + ")"
+    return None
+
+
+def _color_filter(q: dict, where: list) -> None:
+    keys = [k for k in str(q.get("color") or "").split(",") if k]
+    parts = [c for c in (color_condition(k) for k in keys) if c]
+    if keys:
+        where.append("(" + " OR ".join(parts) + ")" if parts else "0")
 
 
 def _where(q: dict) -> tuple[str, dict]:
@@ -294,6 +356,7 @@ def _where(q: dict) -> tuple[str, dict]:
     if q.get("added") == "1":
         where.append("created_in_app=1")
     _column_filters(q, where, binds)
+    _color_filter(q, where)
     return " AND ".join(where), binds
 
 
@@ -902,7 +965,7 @@ def save_view(username: str, name: str, params: dict, shared: bool) -> dict:
     if not name:
         raise ValueError("Give the view a name.")
     keep = {k: str(v) for k, v in params.items()
-            if (k in ("q", "queue", "listing", "category", "sort", "source", "inventory", "added") or k.startswith("cf_")) and v}
+            if (k in ("q", "queue", "listing", "category", "sort", "source", "inventory", "added", "color") or k.startswith("cf_")) and v}
     with tx() as c:
         c.execute("DELETE FROM saved_views WHERE username=? AND name=?", (username, name))
         c.execute("INSERT INTO saved_views(username, name, params, shared, created_at) VALUES(?,?,?,?,?)",

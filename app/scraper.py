@@ -375,6 +375,7 @@ def backup_download() -> bytes:
 
 def start_background() -> None:
     threading.Thread(target=backup_loop, daemon=True).start()
-    from . import sold
+    from . import sold, versions
     sold.start_background()
+    versions.start_background()
 

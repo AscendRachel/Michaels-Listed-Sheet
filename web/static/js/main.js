@@ -25,6 +25,7 @@ const VIEWS = {
   scraper: { label: "Scraper", mod: "./v-scraper.js" },
   productivity: { label: "Productivity", mod: "./v-productivity.js" },
   activity: { label: "Activity", mod: "./v-activity.js" },
+  history: { label: "Version history", mod: "./v-history.js" },
   team: { label: "Team", mod: "./v-team.js", admin: true },
 };
 
