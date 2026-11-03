@@ -164,7 +164,7 @@ DEFAULT_SETTINGS = {"zip_code": "32809", "timeframe_days": "6", "delay_min_secon
                     "history_days": "180", "title_threshold": "50",
                     # words the team treats as the same thing when comparing titles, one group per line: "sticker, decal"
                     "title_synonyms": ""}
-STATUS_ALGO = "3"       # bump when compute_status changes: every stored status is re-derived once at startup
+STATUS_ALGO = "4"     # bump when compute_status changes: every stored status is re-derived once at startup
 TITLE_ALGO = "2"       # bump when the title matching changes: every stored title verdict is recomputed once
 
 

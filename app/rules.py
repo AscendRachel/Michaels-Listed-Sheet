@@ -179,8 +179,10 @@ def compute_status(p, timeframe_days: float, title_threshold: float = 50) -> str
         return "Low Price"
     if inv and a == "Availability not found":
         return "Manual Check"
+    # Check Inventory means "turn it on": not when ticking it would only make it OOS Different Item, OOS Variation or TimeFrame
     if (not inv and p["listed"] and a and "availability not found" not in al
-            and "currently unavailable" not in al and "only" not in al):
+            and "currently unavailable" not in al and "only" not in al
+            and tp != "changed" and not variation_problem(p) and not (lead is not None and lead > timeframe_days)):
         return "Check Inventory"
     if inv and a and tp == "mismatch":             # nothing else is wrong, but the title doesn't look like our product
         return "Manual Check"

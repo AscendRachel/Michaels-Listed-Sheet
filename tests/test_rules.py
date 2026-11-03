@@ -54,6 +54,16 @@ def test_unchecking_inventory_resolves_a_timeframe_issue():
     assert compute_status(P(inventory=0, availability="", **slow), 6) == "Not checked"
 
 
+def test_check_inventory_only_when_ticking_it_would_be_clean():
+    ok = dict(title="Wooden Frame 8 inch", title_ok="", title_conflict=0, title_score=90, variation="Large", amazon_variation="Size: Large")
+    assert compute_status(P(inventory=0, **ok), 6) == "Check Inventory"
+    slow = dict(delivery="Delivery January 20", run_at="2026-01-05 10:00:00")
+    assert compute_status(P(inventory=0, **ok, **slow), 6) == "Normal"                                       # would be TimeFrame
+    assert compute_status(P(inventory=0, **ok, **slow), 30) == "Check Inventory"                             # a looser limit makes it fine
+    assert compute_status(P(**{"inventory": 0, **ok, "amazon_variation": "Size: Small"}), 6) == "Normal"    # would be OOS Variation
+    assert compute_status(P(**{"inventory": 0, **ok, "title_conflict": 1}), 6) == "Normal"                  # would be OOS Different Item
+
+
 def test_lead_days_year_rollover():
     d = rules.lead_days("Delivery January 3", "2025-12-30 00:00:00")
     assert d == 4.0
@@ -97,7 +107,7 @@ def test_new_source_statuses():
     assert compute_status(P(**{**ok, "title_conflict": 1}), 6) == "OOS Different Item"
     assert compute_status(P(**{**ok, "title_conflict": 1, "amazon_variation": "Size: Small"}), 6) == "OOS Different Item"
     assert compute_status(P(**{**ok, "title_conflict": 1, "title_ok": ok["title"]}), 6) == "Normal"          # team accepted it
-    assert compute_status(P(**{**ok, "title_conflict": 1, "inventory": 0}), 6) == "Check Inventory"          # inventory off: nothing to turn off
+    assert compute_status(P(**{**ok, "title_conflict": 1, "inventory": 0}), 6) == "Normal"                   # inventory off: nothing to turn off, and not worth turning on
     assert compute_status(P(**{**ok, "title_score": 30}), 6) == "Manual Check"                               # title mismatch
     assert compute_status(P(**{**ok, "title_score": 30, "price": "$12.00"}), 6) == "High Price"              # a real price issue comes first
     assert compute_status(P(**{**ok, "title_score": 30}), 6, title_threshold=20) == "Normal"
