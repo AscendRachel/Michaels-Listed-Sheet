@@ -241,11 +241,13 @@ function openColumnMenu(c, x, y, showValues) {
   const cols = colorsOf(c), onColors = new Set(S.F.color ? S.F.color.split(",") : []);
   const cond = condOf(S.F.cf[c.k], kind), sorted = S.F.sort === c.k ? "asc" : S.F.sort === "-" + c.k ? "desc" : "";
   const swatch = (col) => `<span class="rc-swatch" style="background:${col}"></span>`;
-  const group = (title, list, row) => (list.length ? `<div class="mhead">${title}</div>${list.map(row).join("")}` : "");
-  const sortRow = (x) => `<button type="button" data-hma="sortcolor" data-k="${x.k}">${swatch(x.c)} ${esc(x.label)}${S.F.sort === "color:" + x.k ? " ✓" : ""}</button>`;
-  const filterRow = (x) => `<label class="check cfrow"><input type="checkbox" data-color="${x.k}" ${onColors.has(x.k) ? "checked" : ""}> ${swatch(x.c)} <span>${esc(x.label)}</span></label>`;
   const sub = (label, body) => `<div class="mi-sub ${body ? "" : "dis"}"><button type="button" class="mi-btn" ${body ? "" : "disabled"}><span>${label}</span><span class="arr">▸</span></button>
     ${body ? `<div class="flyout">${body}</div>` : ""}</div>`;
+  // Like Google Sheets: "None", then Fill colour ▸ and Text colour ▸, each opening a list of the colours; one click applies it.
+  const colorSub = (act, list, isOn) => sub(list === cols.fill ? "Fill colour" : "Text colour",
+    list.map((x) => `<button type="button" data-hma="${act}" data-k="${x.k}">${swatch(x.c)}<span class="cn">${esc(x.label)}</span>${isOn(x.k) ? `<span class="tick">✓</span>` : ""}</button>`).join(""));
+  const colorMenu = (act, noneAct, noneOn, isOn) => `<button type="button" data-hma="${noneAct}"><span class="tick">${noneOn ? "✓" : ""}</span><span>None</span></button>`
+    + colorSub(act, cols.fill, isOn) + colorSub(act, cols.text, isOn);
   const acc = (id, label, body, open) => `<button type="button" class="mi-acc" data-acc="${id}"><span class="tri">${open ? "▾" : "▸"}</span> ${label}</button><div class="acc-body" data-body="${id}" ${open ? "" : "hidden"}>${body}</div>`;
   const opts = (list, sel) => list.map(([v, l]) => `<option value="${esc(v)}" ${v === sel ? "selected" : ""}>${l}</option>`).join("");
 
@@ -255,9 +257,8 @@ function openColumnMenu(c, x, y, showValues) {
   m.innerHTML = `<div class="mhead">${esc(c.l)}</div>
     <button type="button" data-hma="asc">Sort A → Z${sorted === "asc" ? " ✓" : ""}</button><button type="button" data-hma="desc">Sort Z → A${sorted === "desc" ? " ✓" : ""}</button>
     ${S.F.sort ? `<button type="button" data-hma="nosort">Clear sort</button>` : ""}
-    ${sub("Sort by color", hasColors ? group("Fill colour", cols.fill, sortRow) + group("Text colour", cols.text, sortRow) : "")}<hr>
-    ${filterable ? `${sub("Filter by color", hasColors ? group("Fill colour", cols.fill, filterRow) + group("Text colour", cols.text, filterRow)
-        + `<div class="prow2"><button type="button" class="btn small primary" data-hma="colorapply">Apply</button><button type="button" data-hma="colorclear">Clear</button></div>` : "")}
+    ${sub("Sort by color", hasColors ? colorMenu("sortcolor", "sortcolornone", !/^-?color:/.test(S.F.sort), (k) => S.F.sort === "color:" + k) : "")}<hr>
+    ${filterable ? `${sub("Filter by color", hasColors ? colorMenu("colorpick", "colorclear", !onColors.size, (k) => onColors.has(k)) : "")}
       ${kind ? acc("cond", "Filter by condition", `<select name="op">${opts(kind === "text" ? COND_TEXT : COND_NUM, cond.op)}</select>
         <input name="a" placeholder="Value" value="${esc(cond.a)}" ${!cond.op || cond.op.startsWith("(") ? "hidden" : ""}>
         <input name="b" placeholder="and" value="${esc(cond.b)}" ${cond.op === ".." ? "" : "hidden"}>
@@ -288,12 +289,14 @@ function openColumnMenu(c, x, y, showValues) {
 
   // the branches (sort by colour, filter by colour) open beside the item, on hover or on a click
   const openSub = (s) => {
-    m.querySelectorAll(".mi-sub.open").forEach((o) => { if (o !== s) o.classList.remove("open"); });
-    const fl = s.querySelector(".flyout");
+    m.querySelectorAll(".mi-sub.open").forEach((o) => { if (o !== s && !o.contains(s)) o.classList.remove("open"); });      // a branch inside a branch keeps its parent open
+    const fl = s.querySelector(":scope > .flyout");
     if (!fl || s.classList.contains("dis")) return;
     s.classList.add("open");
     const r = s.getBoundingClientRect(), w = fl.offsetWidth || 260;
-    fl.style.left = `${r.right + w + 8 > innerWidth ? Math.max(8, r.left - w + 4) : r.right - 4}px`;
+    const left = s.parentElement.closest(".mi-sub")?.dataset.dir === "left" || r.right + w + 8 > innerWidth;      // a branch opens the same way as the one it hangs from
+    s.dataset.dir = left ? "left" : "right";
+    fl.style.left = `${left ? Math.max(8, r.left - w + 4) : r.right - 4}px`;
     fl.style.top = `${Math.max(8, Math.min(r.top, innerHeight - fl.offsetHeight - 8))}px`;
   };
   m.addEventListener("mouseover", (e) => {
@@ -368,8 +371,9 @@ function openColumnMenu(c, x, y, showValues) {
     else if (a === "desc") { S.F.sort = "-" + c.k; loadView(true); }
     else if (a === "nosort") { S.F.sort = ""; loadView(true); }
     else if (a === "sortcolor") { S.F.sort = "color:" + b.dataset.k; loadView(true); }
-    else if (a === "colorapply") { S.F.color = [...m.querySelectorAll("input[data-color]:checked")].map((i) => i.dataset.color).join(","); loadView(true); }
-    else if (a === "colorclear") { S.F.color = ""; loadView(true); }
+    else if (a === "sortcolornone") { if (/^-?color:/.test(S.F.sort)) { S.F.sort = ""; loadView(true); } }
+    else if (a === "colorpick") { S.F.color = b.dataset.k; loadView(true); }
+    else if (a === "colorclear") { if (S.F.color) { S.F.color = ""; loadView(true); } }
     else if (a === "condapply") setFilter(condString(m.querySelector('select[name="op"]').value, m.querySelector('input[name="a"]').value, m.querySelector('input[name="b"]').value, kind));
     else if (a === "condclear") setFilter("");
     else if (a === "valok") {

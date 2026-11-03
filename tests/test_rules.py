@@ -57,8 +57,10 @@ def test_unchecking_inventory_resolves_a_timeframe_issue():
 def test_check_inventory_only_when_ticking_it_would_be_clean():
     ok = dict(title="Wooden Frame 8 inch", title_ok="", title_conflict=0, title_score=90, variation="Large", amazon_variation="Size: Large")
     assert compute_status(P(inventory=0, **ok), 6) == "Check Inventory"
+    for bad in ("Unable to access page", "Temporarily out of stock.", "Availability not found", "Currently unavailable.", "Only 3 left in stock"):
+        assert compute_status(P(inventory=0, **{**ok, "availability": bad}), 6) == "Normal"                  # only a real "In Stock" counts
     slow = dict(delivery="Delivery January 20", run_at="2026-01-05 10:00:00")
-    assert compute_status(P(inventory=0, **ok, **slow), 6) == "Normal"                                       # would be TimeFrame
+    assert compute_status(P(inventory=0, **ok, **slow), 6) == "Normal"                                    # would be TimeFrame
     assert compute_status(P(inventory=0, **ok, **slow), 30) == "Check Inventory"                             # a looser limit makes it fine
     assert compute_status(P(**{"inventory": 0, **ok, "amazon_variation": "Size: Small"}), 6) == "Normal"    # would be OOS Variation
     assert compute_status(P(**{"inventory": 0, **ok, "title_conflict": 1}), 6) == "Normal"                  # would be OOS Different Item
