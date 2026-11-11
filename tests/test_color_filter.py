@@ -44,6 +44,21 @@ def test_price_differences_only_count_for_products_with_inventory_on(loaded):
     assert csv.status_code == 200 and "SKU-1" in csv.text and "SKU-2" not in csv.text         # the price-fix export too
 
 
+def test_issue_cards_only_count_products_with_inventory_on(loaded):
+    c = db.conn()
+    c.execute("UPDATE products SET status='High Price', inventory=1 WHERE sku='SKU-1'")
+    c.execute("UPDATE products SET status='High Price', inventory=0 WHERE sku='SKU-2'")          # e.g. a status typed over, or left from before it was unticked
+    c.execute("UPDATE products SET status='Low Inventory', inventory=0 WHERE sku='SKU-3'")
+    c.execute("UPDATE products SET status='TimeFrame', inventory=0 WHERE sku='SKU-4'")
+    counts = loaded.get("/api/queues").json()["counts"]
+    assert counts["High Price"] == 1 and counts.get("Low Inventory", 0) == 0 and counts.get("TimeFrame", 0) == 0
+    for q, want in (("High Price", ["SKU-1"]), ("Low Inventory", []), ("TimeFrame", [])):
+        assert loaded.post("/api/sheet/skus", json={"queue": q}).json()["skus"] == want       # the list a card opens matches its number
+    c.execute("UPDATE products SET inventory=1 WHERE sku IN ('SKU-3','SKU-4')")
+    counts = loaded.get("/api/queues").json()["counts"]
+    assert counts["Low Inventory"] == 1 and counts["TimeFrame"] == 1                             # ticking Inventory brings them back
+
+
 def test_filter_by_colour_finds_the_rows_the_grid_paints(loaded):
     # SKU-1 High Price, SKU-2 Out of Stock (both with Inventory on), SKU-3 Inventory off but the marketplace has stock,
     # SKU-4 Inventory on and marketplace stock (no colour at all)

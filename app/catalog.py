@@ -75,13 +75,19 @@ def _binds(c=None) -> dict:
             "mz": 1 if c.execute("SELECT 1 FROM michaels_imports LIMIT 1").fetchone() else 0}
 
 
+# These dashboard cards flag products that are on sale: a row with Inventory unchecked is never one of them,
+# whatever status is stored on it (a typed status, or one left over from before Inventory was unticked).
+INVENTORY_ONLY = ("High Price", "Low Inventory", "TimeFrame")
+_NOT_FLAGGED = "COALESCE(inventory,0)=0 AND COALESCE(status,'') IN (" + ", ".join(f"'{s}'" for s in INVENTORY_ONLY) + ")"
+
+
 def queue_counts() -> dict:
     c = conn()
     binds = _binds(c)
     parts = ", ".join(f'SUM(CASE WHEN {cond} THEN 1 ELSE 0 END) AS "{k}"' for k, (_, _, cond) in EXTRA_QUEUES.items())
     row = c.execute(f"SELECT COUNT(*) AS total, MAX(run_at) AS last_check, {parts} FROM products WHERE active=1", binds).fetchone()
     counts = {k: (row[k] or 0) for k in EXTRA_QUEUES}
-    for r in c.execute("SELECT COALESCE(status,'Not checked') s, COUNT(*) n FROM products WHERE active=1 GROUP BY s"):
+    for r in c.execute(f"SELECT COALESCE(status,'Not checked') s, COUNT(*) n FROM products WHERE active=1 AND NOT ({_NOT_FLAGGED}) GROUP BY s"):
         counts[r["s"]] = r["n"]
     return {"counts": counts, "total": row["total"], "last_check": row["last_check"]}
 
@@ -338,6 +344,8 @@ def _where(q: dict) -> tuple[str, dict]:
     elif queue:
         where.append("COALESCE(status,'Not checked')=:queue")
         binds["queue"] = queue
+        if queue in INVENTORY_ONLY:
+            where.append("COALESCE(inventory,0)<>0")
     if q.get("listing"):
         if q["listing"] == "(blank)":
             where.append("COALESCE(listing_status,'')=''")
