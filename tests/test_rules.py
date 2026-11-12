@@ -41,6 +41,20 @@ def test_status_order():
     assert compute_status(P(availability=""), 6) == "Not checked"
 
 
+def test_out_of_stock_with_amazons_longer_wording():
+    long = "Currently unavailable. We don't know when or if this item will be back in stock."
+    assert compute_status(P(availability=long, price="Price not found", delivery="Delivery not found"), 6) == "Out of Stock"
+    assert compute_status(P(availability=long, inventory=0), 6) == "Normal"                 # Inventory off: not an issue
+    assert compute_status(P(availability="Temporarily out of stock.", price="Price not found"), 6) == "Out of Stock"
+    assert compute_status(P(availability="Temporarily out of stock.", inventory=0), 6) == "Normal"
+
+
+def test_unable_to_access_page_is_a_manual_check():
+    p = dict(availability="Unable to access page", price="Price not found", delivery="Delivery not found")
+    assert compute_status(P(**p), 6) == "Manual Check"
+    assert compute_status(P(inventory=0, **p), 6) == "Normal"                               # Inventory off: not an issue
+
+
 def test_timeframe_beats_everything():
     p = P(availability="Currently unavailable.", delivery="Delivery January 20", run_at="2026-01-05 10:00:00")
     assert compute_status(p, 6) == "TimeFrame"

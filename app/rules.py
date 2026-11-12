@@ -169,7 +169,7 @@ def compute_status(p, timeframe_days: float, title_threshold: float = 50) -> str
         return "OOS Variation"
     if inv and lead is not None and lead > timeframe_days:         # a product with Inventory unchecked is already off sale: its delivery time is no issue
         return "TimeFrame"
-    if inv and a == "Currently unavailable.":
+    if inv and ("currently unavailable" in al or "temporarily out of stock" in al):       # Amazon also adds "We don't know when or if this item will be back in stock."
         return "Out of Stock"
     if inv and "only" in al:
         return "Low Inventory"
@@ -177,7 +177,7 @@ def compute_status(p, timeframe_days: float, title_threshold: float = 50) -> str
         return "High Price"
     if inv and v and src is not None and src > v:
         return "Low Price"
-    if inv and a == "Availability not found":
+    if inv and (a == "Availability not found" or "unable to access page" in al):       # the scraper couldn't read the page
         return "Manual Check"
     # Check Inventory means "turn it on": not when ticking it would only make it OOS Different Item, OOS Variation or TimeFrame
     if (not inv and p["listed"] and al.startswith("in stock")         # "Unable to access page", "Temporarily out of stock." ... are not stock
@@ -212,7 +212,7 @@ def explain_status(p, timeframe_days: float) -> str:
     if st == "Manual Check":
         if title_problem(p) == "mismatch":
             return "The Amazon title doesn't look like this product. Open it and check."
-        return "Availability couldn't be read."
+        return "The scraper couldn't open the Amazon page." if "unable to access" in (p["availability"] or "").lower() else "Availability couldn't be read."
     if st == "Not checked":
         return "No Amazon check yet."
     return "No issues from the last check."

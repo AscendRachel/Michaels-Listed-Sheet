@@ -121,14 +121,14 @@ export function download(href) {
 
 // ---- status vocabulary (colors come from CSS classes)
 export const STATUS = {
-  "Out of Stock": { cls: "crit", desc: "Inventory is on but Amazon shows currently unavailable." },
+  "Out of Stock": { cls: "crit", desc: "Inventory is on but Amazon shows currently unavailable or temporarily out of stock." },
   "OOS Different Item": { cls: "crit", desc: "The Amazon listing changed to a different item (pack count or size no longer matches). Set it out of stock." },
   "OOS Variation": { cls: "crit", desc: "The variation Amazon shows isn't the one in the catalog's VARIATION column." },
   "High Price": { cls: "crit", desc: "Amazon price is now above your source price. Margin is shrinking." },
   "Low Inventory": { cls: "warn", desc: "Amazon shows “Only X left in stock”." },
   TimeFrame: { cls: "warn", desc: "Earliest delivery is further out than the allowed days." },
   "Low Price": { cls: "info", desc: "Amazon price dropped below your source price." },
-  "Manual Check": { cls: "neutral", desc: "The scraper couldn't read availability, or the Amazon title doesn't look like the product." },
+  "Manual Check": { cls: "neutral", desc: "The scraper couldn't read availability or open the page, or the Amazon title doesn't look like the product." },
   "Check Inventory": { cls: "violet", desc: "Listed, inventory off, and Amazon looks available. Ticking Inventory would be clean: no Time Frame, OOS Variation or OOS Different Item." },
   Normal: { cls: "ok", desc: "No issues from the last check." },
   "Not checked": { cls: "neutral", desc: "No Amazon check yet." },
