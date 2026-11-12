@@ -40,7 +40,7 @@ export async function mount(el, params, ctx) {
   const settings = (d) => {
     const s = d.settings;
     const f = (k, label, hint = "") => `<label class="field"><span>${label}</span><input name="${k}" value="${esc(s[k])}" ${admin ? "" : "disabled"}>${hint ? `<div class="hint">${hint}</div>` : ""}</label>`;
-    return `<form id="setForm"><div class="formgrid">${f("zip_code", "Delivery ZIP code", "Amazon delivery dates depend on this.")}${f("timeframe_days", "Allowed delivery days", "Longer than this becomes “TimeFrame”.")}
+    return `<form id="setForm"><div class="formgrid">${f("zip_code", "Delivery ZIP code", "Amazon delivery dates depend on this.")}${f("timeframe_days", "Allowed delivery days", "Day 1 is tomorrow. Delivery later than this many days becomes “TimeFrame”.")}
       ${f("delay_min_seconds", "Min pause between products (s)")}${f("delay_max_seconds", "Max pause (s)")}${f("history_days", "Keep check history (days)")}${f("title_threshold", "Title match alert below (%)")}</div>
       <label class="field" style="margin-top:12px"><span>Words that mean the same (for the Amazon title check)</span>
         <textarea name="title_synonyms" rows="4" ${admin ? "" : "disabled"} placeholder="one group per line, e.g.&#10;sticker, decal&#10;tumbler, travel cup">${esc(s.title_synonyms || "")}</textarea>

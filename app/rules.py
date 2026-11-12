@@ -104,26 +104,38 @@ def parse_run(run_at: str | None) -> datetime | None:
     return None
 
 
-def lead_days(delivery: str | None, run_at: str | None) -> float | None:
-    """Days between the check and the earliest delivery date mentioned in the text."""
+def lead_days(delivery: str | None, run_at: str | None) -> int | None:
+    """Whole calendar days from the day of the check to the earliest delivery day in the text: tomorrow is day 1, so a
+    product that arrives tomorrow is inside an allowance of 1 day, whatever time of day it was checked."""
     run = parse_run(run_at)
     best = earliest_delivery(delivery, run_at)
-    return None if best is None or run is None else (best - run).total_seconds() / 86400
+    return None if best is None or run is None else (best.date() - run.date()).days
+
+
+# Amazon sometimes gives no date at all: "Get it tomorrow", "overnight by 10 PM".
+RELATIVE_RE = re.compile(r"\b(today|tonight|tomorrow|overnight)\b", re.I)
+RELATIVE_DAYS = {"today": 0, "tonight": 0, "tomorrow": 1, "overnight": 1}
 
 
 def earliest_delivery(delivery: str | None, run_at: str | None) -> datetime | None:
-    """The earliest delivery date mentioned in Amazon's delivery text (year taken from the check date)."""
+    """The earliest delivery day mentioned in Amazon's delivery text: a date (year taken from the check date) or a word
+    like tomorrow or overnight."""
     run = parse_run(run_at)
     if not run:
         return None
+    today = datetime(run.year, run.month, run.day)
     best = None
     for m in MONTH_RE.finditer(delivery or ""):
         try:
             d = datetime(run.year, MONTHS.index(m.group(1)) + 1, int(m.group(2)))
         except ValueError:
             continue
-        if d < run - timedelta(days=60):
+        if d < today - timedelta(days=60):
             d = d.replace(year=run.year + 1)
+        if best is None or d < best:
+            best = d
+    for m in RELATIVE_RE.finditer(delivery or ""):
+        d = today + timedelta(days=RELATIVE_DAYS[m.group(1).lower()])
         if best is None or d < best:
             best = d
     return best
@@ -197,7 +209,7 @@ def explain_status(p, timeframe_days: float) -> str:
         return f"Amazon is {money(v)}, your source price is {money(p['source_price'])}."
     if st == "TimeFrame":
         lead = lead_days(p["delivery"], p["run_at"])
-        return (f"Earliest delivery is {lead:.1f} days after the check (limit {timeframe_days:g})."
+        return (f"Earliest delivery is day {lead} after the check (tomorrow is day 1; limit {timeframe_days:g})."
                 if lead is not None else "Delivery is further out than allowed.")
     if st == "Out of Stock":
         return "Amazon says “Currently unavailable.”"

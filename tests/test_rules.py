@@ -80,6 +80,24 @@ def test_check_inventory_only_when_ticking_it_would_be_clean():
     assert compute_status(P(**{"inventory": 0, **ok, "title_conflict": 1}), 6) == "Normal"                  # would be OOS Different Item
 
 
+def test_delivery_days_count_from_tomorrow_and_understand_tomorrow_or_overnight():
+    ld = rules.lead_days
+    assert ld("FREE delivery Tuesday, January 6", "2026-01-05 10:00:00") == 1                  # tomorrow is day 1
+    assert ld("FREE delivery Tuesday, January 6", "2026-01-05 23:59:00") == 1                  # the time of the check doesn't matter
+    assert ld("FREE delivery Wednesday, January 7", "2026-01-05 00:01:00") == 2
+    assert ld("Get it today", "2026-01-05 10:00:00") == 0
+    assert ld("FREE overnight delivery by 10 PM", "2026-01-05 10:00:00") == 1
+    assert ld("FREE delivery Tomorrow", "2026-01-05 10:00:00") == 1
+    assert ld("FREE delivery Friday, January 9 or fastest delivery Tomorrow", "2026-01-05 10:00:00") == 1    # the earliest one counts
+    assert ld("Delivery not found", "2026-01-05 10:00:00") is None
+    # an allowance of 2 days: tomorrow, the day after and an overnight text are fine, the day after that is a TimeFrame
+    for text, want in (("FREE delivery Tomorrow", "Normal"), ("FREE overnight delivery", "Normal"),
+                       ("FREE delivery Wednesday, January 7", "Normal"), ("FREE delivery Thursday, January 8", "TimeFrame")):
+        assert compute_status(P(delivery=text), 2) == want, text
+    assert compute_status(P(delivery="FREE delivery Tuesday, January 6"), 1) == "Normal"
+    assert compute_status(P(delivery="FREE delivery Wednesday, January 7"), 1) == "TimeFrame"
+
+
 def test_lead_days_year_rollover():
     d = rules.lead_days("Delivery January 3", "2025-12-30 00:00:00")
     assert d == 4.0
